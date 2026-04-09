@@ -1,0 +1,54 @@
+name: Build and Publish Skynet Libraries
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/**"
+      - "VERSION"
+  pull_request:
+    branches: [main]
+    paths:
+      - "packages/**"
+
+jobs:
+  lint-test:
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - name: Install all packages
+        run: uv sync --all-packages
+      - name: Lint
+        run: uv run ruff check packages/
+      - name: Format check
+        run: uv run ruff format --check packages/
+      - name: Tests
+        run: uv run pytest packages/ -v
+
+  publish:
+    needs: lint-test
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64]
+    strategy:
+      matrix:
+        package:
+          - skynet-core
+          - skynet-qdrant
+          - skynet-embedding
+          - skynet-matrix
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - name: Build ${{ matrix.package }}
+        run: uv build packages/${{ matrix.package }}
+      - name: Publish to Nexus
+        env:
+          UV_PUBLISH_URL: http://nexus.nexus.svc:8081/repository/pypi-hosted/
+          UV_PUBLISH_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          UV_PUBLISH_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: uv publish packages/${{ matrix.package }}/dist/*

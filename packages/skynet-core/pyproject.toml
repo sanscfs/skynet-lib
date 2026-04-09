@@ -1,0 +1,27 @@
+[project]
+name = "skynet-core"
+version = "2026.4.1"
+description = "Skynet shared foundation: config, logging, tracing, Redis, health checks"
+requires-python = ">=3.12"
+dependencies = [
+    "redis>=5.0",
+    "opentelemetry-api>=1.28",
+    "opentelemetry-sdk>=1.28",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.28",
+]
+
+[project.optional-dependencies]
+fastapi = ["opentelemetry-instrumentation-fastapi>=0.49"]
+httpx = ["opentelemetry-instrumentation-httpx>=0.49"]
+requests = ["opentelemetry-instrumentation-requests>=0.49"]
+redis-otel = ["opentelemetry-instrumentation-redis>=0.49"]
+all = [
+    "opentelemetry-instrumentation-fastapi>=0.49",
+    "opentelemetry-instrumentation-httpx>=0.49",
+    "opentelemetry-instrumentation-requests>=0.49",
+    "opentelemetry-instrumentation-redis>=0.49",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
