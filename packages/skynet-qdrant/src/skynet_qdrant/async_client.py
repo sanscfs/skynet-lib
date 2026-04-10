@@ -141,8 +141,12 @@ class AsyncQdrantClient:
         offset = None
         while True:
             points, next_offset = await self.scroll(
-                collection, limit=batch_size, offset=offset, filter=filter,
-                with_payload=with_payload, with_vector=with_vector,
+                collection,
+                limit=batch_size,
+                offset=offset,
+                filter=filter,
+                with_payload=with_payload,
+                with_vector=with_vector,
             )
             all_points.extend(points)
             if not next_offset:
@@ -152,13 +156,15 @@ class AsyncQdrantClient:
 
     async def set_payload(self, collection: str, point_ids: list, payload: dict) -> dict:
         return await self._request(
-            "POST", f"/collections/{collection}/points/payload?wait=true",
+            "POST",
+            f"/collections/{collection}/points/payload?wait=true",
             {"payload": payload, "points": point_ids},
         )
 
     async def delete_points(self, collection: str, point_ids: list) -> dict:
         return await self._request(
-            "POST", f"/collections/{collection}/points/delete?wait=true",
+            "POST",
+            f"/collections/{collection}/points/delete?wait=true",
             {"points": point_ids},
         )
 
@@ -171,7 +177,9 @@ class AsyncQdrantClient:
 
     async def get_point(self, collection: str, point_id, *, with_vector: bool = False) -> dict | None:
         try:
-            resp = await self._request("GET", f"/collections/{collection}/points/{point_id}?with_vector={str(with_vector).lower()}")
+            resp = await self._request(
+                "GET", f"/collections/{collection}/points/{point_id}?with_vector={str(with_vector).lower()}"
+            )
             return resp.get("result")
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -179,7 +187,9 @@ class AsyncQdrantClient:
             raise
 
     async def create_payload_index(self, collection: str, field_name: str, field_schema: str) -> dict:
-        return await self._request("PUT", f"/collections/{collection}/index", {"field_name": field_name, "field_schema": field_schema})
+        return await self._request(
+            "PUT", f"/collections/{collection}/index", {"field_name": field_name, "field_schema": field_schema}
+        )
 
     async def healthy(self) -> bool:
         try:

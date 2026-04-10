@@ -190,7 +190,9 @@ class QdrantClient:
     def get_point(self, collection: str, point_id, *, with_vector: bool = False) -> dict | None:
         """Get a single point by ID."""
         try:
-            resp = self._request("GET", f"/collections/{collection}/points/{point_id}?with_vector={str(with_vector).lower()}")
+            resp = self._request(
+                "GET", f"/collections/{collection}/points/{point_id}?with_vector={str(with_vector).lower()}"
+            )
             return resp.get("result")
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:

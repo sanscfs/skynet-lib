@@ -130,6 +130,7 @@ class AsyncMatrixClient:
             params["since"] = since
         if room_filter:
             import json
+
             params["filter"] = json.dumps(room_filter)
 
         try:

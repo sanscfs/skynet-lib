@@ -12,13 +12,13 @@ import time
 from typing import Any
 
 from skynet_matrix.stream_events import (
+    DEFAULT_STREAM_MAXLEN,
+    DEFAULT_STREAM_TTL_SECONDS,
+    MATRIX_EDIT_DEBOUNCE_SECONDS,
     EventType,
     StreamEvent,
     format_event_for_matrix,
     stream_key,
-    DEFAULT_STREAM_MAXLEN,
-    DEFAULT_STREAM_TTL_SECONDS,
-    MATRIX_EDIT_DEBOUNCE_SECONDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,12 @@ class LiveStream:
         if self.redis is not None:
             try:
                 self.redis.execute_command(
-                    "XADD", self.skey, "MAXLEN", "~", str(self.maxlen), "*",
+                    "XADD",
+                    self.skey,
+                    "MAXLEN",
+                    "~",
+                    str(self.maxlen),
+                    "*",
                     *sum(evt.to_redis_fields().items(), ()),
                 )
             except Exception as e:

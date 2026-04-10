@@ -56,7 +56,9 @@ class LLMConfig:
 
 @dataclass(frozen=True)
 class MatrixConfig:
-    homeserver_url: str = field(default_factory=lambda: _env("MATRIX_HOMESERVER_URL", "http://conduwuit.matrix.svc:6167"))
+    homeserver_url: str = field(
+        default_factory=lambda: _env("MATRIX_HOMESERVER_URL", "http://conduwuit.matrix.svc:6167")
+    )
     bot_token: str = field(default_factory=lambda: _env("MATRIX_BOT_TOKEN"))
     room_id: str = field(default_factory=lambda: _env("MATRIX_ROOM_ID"))
     alerts_room_id: str = field(default_factory=lambda: _env("MATRIX_ALERTS_ROOM_ID"))

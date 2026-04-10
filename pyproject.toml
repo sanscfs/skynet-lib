@@ -6,6 +6,23 @@ requires-python = ">=3.12"
 [tool.uv.workspace]
 members = ["packages/*"]
 
+# Resolve inter-package deps from the local workspace (not PyPI) during
+# uv sync. Required so that `skynet-embedding`/`skynet-matrix` (which list
+# `skynet-core>=2026.4.2` in [project.dependencies]) find it inside this
+# repo. Without these sources uv tries to fetch skynet-core from PyPI and
+# fails since the packages live only on the internal Nexus.
+[tool.uv.sources]
+skynet-core = { workspace = true }
+skynet-qdrant = { workspace = true }
+skynet-embedding = { workspace = true }
+skynet-matrix = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+    "pytest>=8",
+]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 120

@@ -14,7 +14,7 @@ import logging
 import os
 from typing import Any
 
-from skynet_embedding.providers import ollama_embed, openrouter_embed, hash_embed
+from skynet_embedding.providers import hash_embed, ollama_embed, openrouter_embed
 
 logger = logging.getLogger(__name__)
 
