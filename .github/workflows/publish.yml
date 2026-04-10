@@ -68,6 +68,14 @@ jobs:
           NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           set -euo pipefail
+          # DEBUG: confirm the secret we got has the same content as the
+          # Vault-sourced K8s secret (without revealing the value itself).
+          echo "user_len=${#NEXUS_USER} pass_len=${#NEXUS_PASS}"
+          printf '%s' "$NEXUS_PASS" | sha256sum | cut -c1-16
+          # Quick auth sanity check against the known-good status endpoint.
+          http=$(curl -sS -o /dev/null -w "%{http_code}" -u "$NEXUS_USER:$NEXUS_PASS" \
+            http://nexus.nexus.svc:8081/service/rest/v1/status)
+          echo "status_endpoint_auth=$http"
           # `uv publish` was returning 401 from this runner while a plain
           # curl upload with the same creds succeeds. Skip uv publish and
           # POST the wheels directly to the pypi-hosted upload endpoint.
