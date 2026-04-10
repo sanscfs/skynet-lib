@@ -71,6 +71,24 @@ class QdrantClient:
             result = self._request("PUT", f"/collections/{collection}/points?wait=true", {"points": batch})
         return result
 
+    def update_vectors(self, collection: str, points: list[dict]) -> dict:
+        """Update vectors in-place without touching payloads.
+
+        Each point: {"id": ..., "vector": [...]}. Batched like upsert().
+        Useful for re-embedding with a new model: preserves IDs/payloads,
+        replaces only the vector values.
+        """
+        batch_size = 100
+        result: dict = {}
+        for i in range(0, len(points), batch_size):
+            batch = points[i : i + batch_size]
+            result = self._request(
+                "PUT",
+                f"/collections/{collection}/points/vectors?wait=true",
+                {"points": batch},
+            )
+        return result
+
     def search(
         self,
         collection: str,

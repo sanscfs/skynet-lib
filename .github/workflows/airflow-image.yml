@@ -1,0 +1,98 @@
+name: Build Airflow Skynet Image
+
+# Rebuild triggers:
+# 1. After "Build and Publish Skynet Libraries" succeeds on main
+#    (waits so pip install from Nexus picks up the fresh version).
+# 2. On direct push to docker/airflow/** (image-only changes — Dockerfile,
+#    requirements pin). Does NOT depend on publish in this case.
+# 3. Manual dispatch with optional tag override.
+on:
+  workflow_run:
+    workflows: ["Build and Publish Skynet Libraries"]
+    types: [completed]
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - "docker/airflow/**"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Override image tag (default: commit SHA)"
+        required: false
+        default: ""
+
+env:
+  IMAGE: ghcr.io/sanscfs/airflow-skynet
+
+jobs:
+  build:
+    # Skip if the triggering publish workflow failed.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: [self-hosted, linux, x64]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+        with:
+          # host network so the build container can reach nexus.nexus.svc:8081
+          driver-opts: network=host
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/airflow/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # host network is required INSIDE the build containers too, so
+          # `pip install` from nexus.nexus.svc works during RUN steps.
+          network: host
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Bump infra values.yaml
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          INFRA_TOKEN: ${{ secrets.INFRA_PAT }}
+          NEW_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if [ -z "$INFRA_TOKEN" ]; then
+            echo "INFRA_PAT secret not set, skipping values.yaml bump"
+            exit 0
+          fi
+          git clone --depth=1 https://x-access-token:${INFRA_TOKEN}@github.com/sanscfs/infra.git /tmp/infra
+          cd /tmp/infra
+          F=infra-apps/airflow/values.yaml
+          sed -i \
+            -e "s|defaultAirflowRepository:.*|defaultAirflowRepository: ghcr.io/sanscfs/airflow-skynet|" \
+            -e "s|defaultAirflowTag:.*|defaultAirflowTag: \"${NEW_TAG}\"|" \
+            "$F"
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add "$F"
+          git diff --cached --quiet || git commit -m "chore(airflow): bump skynet image to ${NEW_TAG:0:7}
+
+Auto-bump by sanscfs/skynet-lib airflow-image workflow."
+          git push
