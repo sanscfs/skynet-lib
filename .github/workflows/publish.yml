@@ -63,23 +63,47 @@ jobs:
           done
       - name: Publish all packages to Nexus
         env:
-          UV_PUBLISH_URL: http://nexus.nexus.svc:8081/repository/pypi-hosted/
-          UV_PUBLISH_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          UV_PUBLISH_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          NEXUS_URL: http://nexus.nexus.svc:8081/repository/pypi-hosted/
+          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           set -euo pipefail
+          # `uv publish` was returning 401 from this runner while a plain
+          # curl upload with the same creds succeeds. Skip uv publish and
+          # POST the wheels directly to the pypi-hosted upload endpoint.
           for pkg in skynet-core skynet-qdrant skynet-embedding skynet-matrix; do
-            # Skip if Nexus already has this exact version (idempotent reruns).
-            # uv publish returns error on duplicate uploads.
-            set +e
-            uv publish "packages/$pkg"/dist/* 2>&1 | tee /tmp/publish.log
-            rc=$?
-            set -e
-            if [ $rc -ne 0 ]; then
-              if grep -q "already exists\|409" /tmp/publish.log; then
-                echo "$pkg already published at this version, skipping."
-                continue
+            for f in "packages/$pkg"/dist/*; do
+              echo "Uploading $f"
+              set +e
+              http=$(curl -sS -o /tmp/upload_resp.txt -w "%{http_code}" \
+                -u "$NEXUS_USER:$NEXUS_PASS" \
+                -F "$(basename $f)=@$f" \
+                "$NEXUS_URL")
+              rc=$?
+              set -e
+              if [ $rc -ne 0 ]; then
+                echo "curl failed ($rc)"
+                cat /tmp/upload_resp.txt
+                exit $rc
               fi
-              exit $rc
-            fi
+              case "$http" in
+                2??)
+                  echo "  -> $http OK"
+                  ;;
+                400|409)
+                  if grep -qiE "already|duplicate|exists" /tmp/upload_resp.txt; then
+                    echo "  -> $http already uploaded, skipping"
+                  else
+                    echo "  -> $http bad request:"
+                    cat /tmp/upload_resp.txt
+                    exit 1
+                  fi
+                  ;;
+                *)
+                  echo "  -> $http:"
+                  head -c 500 /tmp/upload_resp.txt
+                  exit 1
+                  ;;
+              esac
+            done
           done
