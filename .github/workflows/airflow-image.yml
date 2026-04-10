@@ -63,9 +63,9 @@ jobs:
           file: docker/airflow/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          # host network is required INSIDE the build containers too, so
-          # `pip install` from nexus.nexus.svc works during RUN steps.
-          network: host
+          # Host network reaches nexus.nexus.svc via the buildx builder
+          # configured with `driver-opts: network=host` above. No extra
+          # param needed here — build-push-action inherits builder network.
           tags: |
             ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
             ${{ env.IMAGE }}:latest
@@ -92,7 +92,5 @@ jobs:
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add "$F"
-          git diff --cached --quiet || git commit -m "chore(airflow): bump skynet image to ${NEW_TAG:0:7}
-
-Auto-bump by sanscfs/skynet-lib airflow-image workflow."
+          git diff --cached --quiet || git commit -m "chore(airflow): bump skynet image to ${NEW_TAG:0:7}"
           git push
