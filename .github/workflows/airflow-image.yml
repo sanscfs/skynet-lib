@@ -69,8 +69,14 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
             ${{ env.IMAGE }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # No GHA cache and no SBOM/provenance attestations:
+          # the previous run hung for 20+min in the export step trying
+          # to push the cache+attest blobs to api.github.com. The runner
+          # is on tailnet with limited public egress; cache-to=gha there
+          # is unreliable. Multi-arch base images are large enough that
+          # the redundant cache write was hurting more than it helped.
+          provenance: false
+          sbom: false
 
       - name: Bump infra values.yaml
         if: github.event_name != 'workflow_dispatch'
