@@ -46,26 +46,40 @@ jobs:
     needs: lint-test
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64]
-    strategy:
-      matrix:
-        package:
-          - skynet-core
-          - skynet-qdrant
-          - skynet-embedding
-          - skynet-matrix
+    # One job handles all packages sequentially. A matrix here would
+    # require 4 runner restarts (runner exits clean after each job, and
+    # the skynet-lib deployment only has 1 replica) which causes random
+    # "no runner available" failures.
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
-      - name: Build ${{ matrix.package }}
-        # uv build outputs to workspace-root `dist/` by default. Override
-        # with --out-dir so each package has its own dist/ and the publish
-        # glob below only uploads files for this matrix entry.
-        run: uv build packages/${{ matrix.package }} --out-dir packages/${{ matrix.package }}/dist
-      - name: Publish to Nexus
+      - name: Build all packages
+        run: |
+          set -euo pipefail
+          for pkg in skynet-core skynet-qdrant skynet-embedding skynet-matrix; do
+            uv build "packages/$pkg" --out-dir "packages/$pkg/dist"
+          done
+      - name: Publish all packages to Nexus
         env:
           UV_PUBLISH_URL: http://nexus.nexus.svc:8081/repository/pypi-hosted/
           UV_PUBLISH_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           UV_PUBLISH_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: uv publish packages/${{ matrix.package }}/dist/*
+        run: |
+          set -euo pipefail
+          for pkg in skynet-core skynet-qdrant skynet-embedding skynet-matrix; do
+            # Skip if Nexus already has this exact version (idempotent reruns).
+            # uv publish returns error on duplicate uploads.
+            set +e
+            uv publish "packages/$pkg"/dist/* 2>&1 | tee /tmp/publish.log
+            rc=$?
+            set -e
+            if [ $rc -ne 0 ]; then
+              if grep -q "already exists\|409" /tmp/publish.log; then
+                echo "$pkg already published at this version, skipping."
+                continue
+              fi
+              exit $rc
+            fi
+          done
