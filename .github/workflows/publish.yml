@@ -26,7 +26,17 @@ jobs:
       - name: Format check
         run: uv run ruff format --check packages/
       - name: Tests
-        run: uv run pytest packages/ -v
+        # Exit code 5 = "no tests collected" — accepted while packages
+        # are young and have no tests yet. Remove once tests exist.
+        run: |
+          set +e
+          uv run pytest packages/ -v
+          rc=$?
+          if [ $rc -eq 5 ]; then
+            echo "No tests collected, continuing."
+            exit 0
+          fi
+          exit $rc
 
   publish:
     needs: lint-test
