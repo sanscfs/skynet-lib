@@ -13,10 +13,11 @@ FROM apache/airflow:3.1.8
 
 USER airflow
 
-COPY docker/airflow/requirements.txt /tmp/skynet-reqs.txt
+# Copy requirements with airflow ownership so the later pip step works
+# without trying to rm a root-owned file after switching users.
+COPY --chown=airflow:root docker/airflow/requirements.txt /tmp/skynet-reqs.txt
 
 RUN pip install --no-cache-dir \
         --extra-index-url http://nexus.nexus.svc:8081/repository/pypi-group/simple/ \
         --trusted-host nexus.nexus.svc \
-        -r /tmp/skynet-reqs.txt \
-    && rm /tmp/skynet-reqs.txt
+        -r /tmp/skynet-reqs.txt
