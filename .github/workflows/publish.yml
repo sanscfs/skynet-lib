@@ -58,7 +58,7 @@ jobs:
       - name: Build all packages
         run: |
           set -euo pipefail
-          for pkg in skynet-core skynet-qdrant skynet-embedding skynet-matrix; do
+          for pkg in skynet-core skynet-qdrant skynet-embedding skynet-matrix skynet-scoring; do
             uv build "packages/$pkg" --out-dir "packages/$pkg/dist"
           done
       - name: Publish all packages to Nexus
@@ -68,7 +68,7 @@ jobs:
           UV_PUBLISH_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           set -euo pipefail
-          for pkg in skynet-core skynet-qdrant skynet-embedding skynet-matrix; do
+          for pkg in skynet-core skynet-qdrant skynet-embedding skynet-matrix skynet-scoring; do
             set +e
             uv publish "packages/$pkg"/dist/* 2>&1 | tee /tmp/publish.log
             rc=$?
