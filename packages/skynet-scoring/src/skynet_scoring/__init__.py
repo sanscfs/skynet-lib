@@ -30,7 +30,9 @@ imports short:
 
 from skynet_scoring.classify import (
     MEMORY_CLASSES,
+    NEUTRAL_SALIENCE,
     classify_memory,
+    default_salience_for,
 )
 from skynet_scoring.decay import (
     DEFAULT_LAMBDAS,
@@ -90,7 +92,9 @@ __all__ = [
     "compute_decay_factor",
     "compute_decay_factor_logical",
     "compute_decay_factor_calendar",
-    # Memory classification
+    # Memory classification + salience
     "MEMORY_CLASSES",
+    "NEUTRAL_SALIENCE",
     "classify_memory",
+    "default_salience_for",
 ]

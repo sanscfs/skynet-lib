@@ -9,10 +9,12 @@ from skynet_scoring import (
     DEFAULT_LAMBDAS,
     LAMBDA_IDENTITY,
     MEMORY_CLASSES,
+    NEUTRAL_SALIENCE,
     classify_memory,
     compute_decay_factor,
     compute_decay_factor_calendar,
     compute_decay_factor_logical,
+    default_salience_for,
 )
 
 # --- classify_memory ---------------------------------------------------
@@ -168,3 +170,78 @@ def test_calendar_custom_tau():
     # Can't assert exact value without fixing `now`, but should be
     # strictly below 0.01 for a point that's years old.
     assert factor < 0.01
+
+
+# --- default_salience_for ----------------------------------------------
+
+
+def test_salience_explicit_wins():
+    # An explicit numeric salience always takes precedence.
+    assert default_salience_for({"salience": 0.77, "source": "phone_app_activity"}) == pytest.approx(0.77)
+    # Clamped into [0, 1].
+    assert default_salience_for({"salience": -5.0}) == 0.0
+    assert default_salience_for({"salience": 17.0}) == 1.0
+
+
+def test_salience_source_high_trust():
+    # Source-based bases for authored / ground-truth signals.
+    assert default_salience_for({"source": "wiki:entities/user.md"}) == pytest.approx(0.95)
+    assert default_salience_for({"source": "feedback"}) == pytest.approx(0.85)
+    assert default_salience_for({"source": "identity"}) == pytest.approx(0.90)
+
+
+def test_salience_source_low_noise():
+    # Telemetry sources get the low band and decay fast.
+    assert default_salience_for({"source": "phone_app_activity"}) == pytest.approx(0.15)
+    assert default_salience_for({"source": "k8s"}) == pytest.approx(0.25)
+
+
+def test_salience_prefix_fallback():
+    # Unknown phone_* source falls through to the phone_ prefix rule.
+    assert default_salience_for({"source": "phone_telemetry_sleep"}) == pytest.approx(0.15)
+    # Unknown wiki path -> wiki: prefix rule.
+    assert default_salience_for({"source": "wiki:concepts/tools.md"}) == pytest.approx(0.80)
+
+
+def test_salience_confirmed_boost():
+    # Confirmed_count >= 3 adds +0.1.
+    payload = {"source": "chat", "confirmed_count": 5}
+    assert default_salience_for(payload) == pytest.approx(0.70)  # 0.60 + 0.10
+
+
+def test_salience_contradicted_and_strike_penalties():
+    # Both penalties stack.
+    payload = {"source": "chat", "contradicted_count": 1, "decay_strikes": 2}
+    # 0.60 - 0.10 - 0.15 = 0.35
+    assert default_salience_for(payload) == pytest.approx(0.35)
+
+
+def test_salience_clamps_after_modifier():
+    # Stacked penalties can't drag salience below 0.
+    payload = {
+        "source": "phone_app_activity",
+        "contradicted_count": 1,
+        "decay_strikes": 5,
+    }
+    assert default_salience_for(payload) == 0.0
+
+
+def test_salience_unknown_source_is_neutral():
+    assert default_salience_for({"source": "alien-origin"}) == NEUTRAL_SALIENCE
+    assert default_salience_for({}) == NEUTRAL_SALIENCE
+
+
+def test_salience_non_dict_is_neutral():
+    # Corrupt input -> neutral fallback, no raise.
+    assert default_salience_for(None) == NEUTRAL_SALIENCE  # type: ignore[arg-type]
+    assert default_salience_for("garbage") == NEUTRAL_SALIENCE  # type: ignore[arg-type]
+
+
+def test_logical_decay_picks_up_heuristic_salience():
+    # A phone_app_activity point has low base salience -> lambda_eff
+    # should be larger -> decay factor smaller than a high-salience
+    # wiki point at the same miss count.
+    shared = {"memory_class": "raw", "missed_opportunities": 50}
+    noise = compute_decay_factor_logical({**shared, "source": "phone_app_activity"})
+    wiki = compute_decay_factor_logical({**shared, "source": "wiki:entities/user.md"})
+    assert wiki > noise

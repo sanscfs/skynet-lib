@@ -76,8 +76,17 @@ DEFAULT_LAMBDAS: dict[str, float] = {
 
 # How aggressively salience protects a memory from decay. Effective
 # lambda becomes `lambda * (1 - salience * SALIENCE_MODULATION_STRENGTH)`.
-# At strength 0.8 a high-salience point (salience=0.9) has ~5x the
-# half-life of a baseline (salience=0.5) point in the same class.
+# At strength 0.8 the salience knob spans a ~3x half-life range:
+#
+#   salience  lam_eff / lam   half-life vs default
+#   0.0       1.00            0.6x  (shorter)
+#   0.5 def   0.60            1.0x
+#   0.9       0.28            2.15x (longer)
+#   1.0       0.20            3.00x (longer)
+#
+# Half-life ratio = lam_eff(default) / lam_eff(target). The full span
+# from salience=0 to salience=1 is 5x but the useful range (default 0.5
+# upward) gives at most ~3x. Do not advertise "5x" externally.
 SALIENCE_MODULATION_STRENGTH = float(os.getenv("SALIENCE_MODULATION_STRENGTH", "0.8"))
 
 # Cosine threshold above which a retrieval "match" counts toward
@@ -118,15 +127,21 @@ def compute_decay_factor_logical(
 ) -> float:
     """Return exp(-lambda_eff * missed_opportunities) in [0, 1].
 
-    Reads `missed_opportunities` (int, default 0) and `salience`
-    (float, default 0.5) from the payload. When `memory_class` is
-    omitted we delegate to `classify_memory`. The result is ready to
-    multiply onto a raw vector similarity score.
+    Reads `missed_opportunities` (int, default 0) from the payload.
+    Salience is resolved via `default_salience_for` -- explicit
+    `salience` on the payload wins, otherwise a source-based heuristic
+    picks a base value (wiki/feedback high, phone_app_activity/k8s low)
+    with additive modifiers for confirmation/contradiction/strike
+    counters. See classify.default_salience_for for the full table.
+
+    When `memory_class` is omitted we delegate to `classify_memory`.
+    The result is ready to multiply onto a raw vector similarity score.
 
     Silence-safe: if the system hasn't performed any retrievals, the
-    counter stays at zero and the decay factor is exactly 1.0.
+    missed_opportunities counter stays at zero and the decay factor
+    is exactly 1.0 regardless of memory_class, salience, or lambda.
     """
-    from skynet_scoring.classify import classify_memory
+    from skynet_scoring.classify import classify_memory, default_salience_for
 
     if not isinstance(payload, dict):
         return 1.0
@@ -138,7 +153,7 @@ def compute_decay_factor_logical(
     if lam <= 0:
         return 1.0
 
-    salience = float(payload.get("salience", 0.5) or 0.5)
+    salience = default_salience_for(payload)
     lam_eff = _effective_lambda(lam, salience)
     if lam_eff <= 0:
         return 1.0
