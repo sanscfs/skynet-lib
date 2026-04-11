@@ -1,0 +1,10 @@
+[project]
+name = "skynet-retrieval"
+version = "2026.4.8"
+description = "Skynet retrieval primitives: multi-vector search, merge strategies, HyDE query expansion"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

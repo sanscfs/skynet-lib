@@ -15,6 +15,7 @@ members = [
     "skynet-lib-workspace",
     "skynet-matrix",
     "skynet-qdrant",
+    "skynet-retrieval",
     "skynet-scoring",
 ]
 
@@ -655,6 +656,11 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "httpx", specifier = ">=0.27" }]
+
+[[package]]
+name = "skynet-retrieval"
+version = "2026.4.8"
+source = { editable = "packages/skynet-retrieval" }
 
 [[package]]
 name = "skynet-scoring"
