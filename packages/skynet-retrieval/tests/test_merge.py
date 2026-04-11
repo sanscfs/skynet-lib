@@ -30,9 +30,7 @@ def test_primary_preferred_primary_only_when_no_extras():
 def test_primary_preferred_secondary_fills_gaps():
     primary = [_p("a", 0.9), _p("b", 0.8)]
     hyde = [_p("c", 0.7), _p("a", 0.6)]  # a is dup, c is new
-    out = merge_candidates(
-        [primary, hyde], weights=[1.0, 0.8], limit=5, strategy=MergeStrategy.PRIMARY_PREFERRED
-    )
+    out = merge_candidates([primary, hyde], weights=[1.0, 0.8], limit=5, strategy=MergeStrategy.PRIMARY_PREFERRED)
     assert [r["id"] for r in out] == ["a", "b", "c"]
 
 
@@ -115,9 +113,7 @@ def test_max_score_uses_weighted_max_across_lists():
 def test_max_score_orders_by_weighted_score():
     a = [_p("x", 0.8), _p("y", 0.4)]
     b = [_p("z", 1.0)]
-    out = merge_candidates(
-        [a, b], weights=[1.0, 0.5], limit=5, strategy=MergeStrategy.MAX_SCORE
-    )
+    out = merge_candidates([a, b], weights=[1.0, 0.5], limit=5, strategy=MergeStrategy.MAX_SCORE)
     # weighted scores: x=0.8, y=0.4, z=0.5 -> order [x, z, y]
     assert [r["id"] for r in out] == ["x", "z", "y"]
 
@@ -128,9 +124,7 @@ def test_max_score_orders_by_weighted_score():
 def test_dedupe_first_wins():
     a = [_p("x", 0.9), _p("y", 0.8)]
     b = [_p("y", 0.95)]  # y should keep the primary's representative under primary_preferred
-    out = merge_candidates(
-        [a, b], weights=[1.0, 1.0], limit=5, strategy=MergeStrategy.PRIMARY_PREFERRED
-    )
+    out = merge_candidates([a, b], weights=[1.0, 1.0], limit=5, strategy=MergeStrategy.PRIMARY_PREFERRED)
     assert [r["id"] for r in out] == ["x", "y"]
     # Check the primary's score was preserved for y, not overwritten.
     assert next(r for r in out if r["id"] == "y")["score"] == 0.8
