@@ -17,6 +17,7 @@ skynet-qdrant = { workspace = true }
 skynet-embedding = { workspace = true }
 skynet-matrix = { workspace = true }
 skynet-scoring = { workspace = true }
+skynet-graph = { workspace = true }
 
 [dependency-groups]
 dev = [
