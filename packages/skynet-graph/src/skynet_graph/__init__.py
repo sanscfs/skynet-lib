@@ -34,9 +34,11 @@ from skynet_graph.similarity import (
     EdgeKind,
     SimilarityEdge,
     build_similarity_edges,
+    edges_to_payload,
     top_k_neighbours,
 )
 from skynet_graph.traversal import (
+    STRUCTURAL_EDGE_KINDS,
     reachable,
     traverse_from,
 )
@@ -45,8 +47,10 @@ __all__ = [
     "EdgeKind",
     "SimilarityEdge",
     "build_similarity_edges",
+    "edges_to_payload",
     "top_k_neighbours",
     "traverse_from",
     "reachable",
+    "STRUCTURAL_EDGE_KINDS",
     "merge_cooccurrence",
 ]

@@ -5,3 +5,4 @@ skynet-qdrant>=2026.4.3
 skynet-embedding>=2026.4.2
 skynet-matrix>=2026.4.2
 skynet-scoring>=2026.4.5
+skynet-graph>=2026.4.7

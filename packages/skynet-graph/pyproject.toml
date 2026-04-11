@@ -1,6 +1,6 @@
 [project]
 name = "skynet-graph"
-version = "2026.4.6"
+version = "2026.4.7"
 description = "Skynet memory graph: similarity edges, traversal, co-occurrence accumulation, cluster detection"
 requires-python = ">=3.12"
 dependencies = []
