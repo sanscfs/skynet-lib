@@ -7,7 +7,6 @@ ordering is deterministic and easy to reason about.
 from __future__ import annotations
 
 import pytest
-
 from skynet_retrieval.merge import (
     RRF_K,
     MergeStrategy,
