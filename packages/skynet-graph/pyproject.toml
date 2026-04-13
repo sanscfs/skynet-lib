@@ -1,12 +1,12 @@
 [project]
 name = "skynet-graph"
-version = "2026.4.7"
-description = "Skynet memory graph: similarity edges, traversal, co-occurrence accumulation, cluster detection"
+version = "2026.4.10"
+description = "Skynet memory graph: similarity edges, traversal, co-occurrence accumulation, LLM edge classification, Louvain cliques"
 requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
-louvain = ["python-louvain>=0.16"]
+louvain = ["python-louvain>=0.16", "networkx>=3.2"]
 
 [build-system]
 requires = ["hatchling"]

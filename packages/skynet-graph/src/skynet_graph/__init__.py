@@ -29,6 +29,21 @@ Public API (re-exported from submodules):
     )
 """
 
+from skynet_graph.classify import (
+    RELATED_KIND,
+    STRUCTURAL_KINDS,
+    ClassifiedEdge,
+    classify_edge,
+    classify_pair_bidirectional,
+)
+from skynet_graph.cliques import (
+    DEFAULT_MIN_COS,
+    DEFAULT_RESOLUTION,
+    clique_sizes,
+    compute_cliques,
+    compute_modularity,
+    filter_edges_by_cos,
+)
 from skynet_graph.cooccurrence import merge_cooccurrence
 from skynet_graph.similarity import (
     EdgeKind,
@@ -44,13 +59,29 @@ from skynet_graph.traversal import (
 )
 
 __all__ = [
+    # similarity
     "EdgeKind",
     "SimilarityEdge",
     "build_similarity_edges",
     "edges_to_payload",
     "top_k_neighbours",
+    # traversal
     "traverse_from",
     "reachable",
     "STRUCTURAL_EDGE_KINDS",
+    # co-occurrence
     "merge_cooccurrence",
+    # Phase 4: typed-edge classification
+    "ClassifiedEdge",
+    "classify_edge",
+    "classify_pair_bidirectional",
+    "STRUCTURAL_KINDS",
+    "RELATED_KIND",
+    # Phase 4: Louvain cliques
+    "compute_cliques",
+    "clique_sizes",
+    "compute_modularity",
+    "filter_edges_by_cos",
+    "DEFAULT_MIN_COS",
+    "DEFAULT_RESOLUTION",
 ]
