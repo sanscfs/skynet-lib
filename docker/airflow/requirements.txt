@@ -1,8 +1,9 @@
 # Skynet shared libraries baked into the Airflow image.
 # Bump versions here to roll new DAG runtimes.
 skynet-core>=2026.4.2
-skynet-qdrant>=2026.4.3
+skynet-qdrant>=2026.4.9
 skynet-embedding>=2026.4.2
 skynet-matrix>=2026.4.2
 skynet-scoring>=2026.4.5
-skynet-graph>=2026.4.7
+skynet-graph[louvain]>=2026.4.10
+skynet-retrieval>=2026.4.8
