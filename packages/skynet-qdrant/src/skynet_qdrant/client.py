@@ -23,11 +23,35 @@ class QdrantClient:
         self.url = url.rstrip("/")
         self.timeout = timeout
 
-    def _request(self, method: str, path: str, body: dict | None = None) -> dict:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: dict | None = None,
+        *,
+        quiet_statuses: tuple[int, ...] = (),
+    ) -> dict:
+        """Execute one HTTP request against Qdrant.
+
+        `quiet_statuses` lets the caller mark specific non-2xx
+        responses as expected (e.g. 404 when probing whether a point
+        exists across collections). Those statuses log at DEBUG
+        instead of ERROR so they don't spam the pod log, but they
+        still raise so the caller's exception-handling path runs.
+        """
         with httpx.Client(timeout=self.timeout) as client:
             resp = client.request(method, f"{self.url}{path}", json=body)
             if resp.status_code >= 400:
-                logger.error("Qdrant %s %s -> %s: %s", method, path, resp.status_code, resp.text[:300])
+                if resp.status_code in quiet_statuses:
+                    logger.debug(
+                        "Qdrant %s %s -> %s (expected): %s",
+                        method,
+                        path,
+                        resp.status_code,
+                        resp.text[:300],
+                    )
+                else:
+                    logger.error("Qdrant %s %s -> %s: %s", method, path, resp.status_code, resp.text[:300])
             resp.raise_for_status()
             return resp.json() if resp.content else {}
 
@@ -187,11 +211,28 @@ class QdrantClient:
         resp = self._request("POST", f"/collections/{collection}/points/count", body)
         return resp.get("result", {}).get("count", 0)
 
-    def get_point(self, collection: str, point_id, *, with_vector: bool = False) -> dict | None:
-        """Get a single point by ID."""
+    def get_point(
+        self,
+        collection: str,
+        point_id,
+        *,
+        with_vector: bool = False,
+        expect_missing: bool = False,
+    ) -> dict | None:
+        """Get a single point by ID, or None if it does not exist.
+
+        Pass `expect_missing=True` when the caller is probing across
+        multiple collections and already handles the 404 case. That
+        demotes the 404 log entry to DEBUG so cross-collection probes
+        (e.g. the /neighbors BFS fallback lookup) don't spam the log
+        with one ERROR per collection they checked.
+        """
+        quiet: tuple[int, ...] = (404,) if expect_missing else ()
         try:
             resp = self._request(
-                "GET", f"/collections/{collection}/points/{point_id}?with_vector={str(with_vector).lower()}"
+                "GET",
+                f"/collections/{collection}/points/{point_id}?with_vector={str(with_vector).lower()}",
+                quiet_statuses=quiet,
             )
             return resp.get("result")
         except httpx.HTTPStatusError as e:
