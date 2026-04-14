@@ -66,7 +66,7 @@ NEUTRAL_SALIENCE: Final[float] = 0.5
 
 _BASE_SALIENCE_BY_SOURCE: Final[dict[str, float]] = {
     # High trust — ground truth about the user
-    "wiki:entities/user.md": 0.95,
+    "wiki:persona/sanscfs/profile.md": 0.95,
     "identity": 0.90,
     "wiki": 0.85,
     "feedback": 0.85,
@@ -103,7 +103,7 @@ _BASE_SALIENCE_BY_SOURCE: Final[dict[str, float]] = {
 
 # Prefix-based fallbacks for source family namespacing.
 _BASE_SALIENCE_BY_PREFIX: Final[tuple[tuple[str, float], ...]] = (
-    ("wiki:", 0.80),  # any wiki path not entities/user.md
+    ("wiki:", 0.80),  # any wiki path not persona/sanscfs/profile.md
     ("phone_", 0.15),
     ("app_", 0.15),
     ("k8s_", 0.25),
@@ -154,8 +154,8 @@ def classify_memory(payload: dict) -> str:
     # Identity tier -- ground-truth about the user, maintained in wiki.
     # These are rare in Qdrant today but the hook is here for Phase 6.
     # NOTE: generic `source=wiki` goes to semantic below — only the
-    # specific entities/user.md path counts as identity.
-    if "identity" in category or source in ("identity", "wiki:entities/user.md"):
+    # specific persona/sanscfs/profile.md path counts as identity.
+    if "identity" in category or source in ("identity", "wiki:persona/sanscfs/profile.md"):
         return "identity"
     if "identity" in tag_set:
         return "identity"

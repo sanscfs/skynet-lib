@@ -231,7 +231,7 @@ def test_salience_explicit_wins():
 
 def test_salience_source_high_trust():
     # Source-based bases for authored / ground-truth signals.
-    assert default_salience_for({"source": "wiki:entities/user.md"}) == pytest.approx(0.95)
+    assert default_salience_for({"source": "wiki:persona/sanscfs/profile.md"}) == pytest.approx(0.95)
     assert default_salience_for({"source": "feedback"}) == pytest.approx(0.85)
     assert default_salience_for({"source": "identity"}) == pytest.approx(0.90)
 
@@ -289,5 +289,5 @@ def test_logical_decay_picks_up_heuristic_salience():
     # wiki point at the same miss count.
     shared = {"memory_class": "raw", "missed_opportunities": 50}
     noise = compute_decay_factor_logical({**shared, "source": "phone_app_activity"})
-    wiki = compute_decay_factor_logical({**shared, "source": "wiki:entities/user.md"})
+    wiki = compute_decay_factor_logical({**shared, "source": "wiki:persona/sanscfs/profile.md"})
     assert wiki > noise
