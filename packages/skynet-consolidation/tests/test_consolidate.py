@@ -45,6 +45,32 @@ def test_prompt_lists_structural_edges():
     assert "a -[supersedes]-> b" in p
 
 
+def test_prompt_splits_summaries_from_raws():
+    """Mixed-level members: higher compression_level go to the
+    'prior summaries' bucket; level-0 (default) go to 'raw evidence'."""
+    members = [
+        {"id": "s1", "text": "user likes plants", "compression_level": 1},
+        {"id": "r1", "text": "watered lemon ak at 15:42"},
+        {"id": "r2", "text": "transferred to autopot"},
+    ]
+    p = summarise_prompt(members)
+    assert "Prior summaries" in p
+    assert "id=s1 level=1" in p
+    assert "Raw evidence" in p
+    assert "id=r1:" in p and "id=r2:" in p
+    # Prior summaries block appears BEFORE raws block so the LLM
+    # reads them as the integration target.
+    assert p.index("Prior summaries") < p.index("Raw evidence")
+
+
+def test_prompt_no_summary_header_when_all_level_0():
+    """When all members are level-0, prompt uses the old 'Cluster
+    members:' header (no prior-summaries section at all)."""
+    p = summarise_prompt([_m("a", "x"), _m("b", "y")])
+    assert "Prior summaries" not in p
+    assert "Cluster members:" in p
+
+
 # --- _parse_response ----------------------------------------------------
 
 

@@ -538,7 +538,7 @@ wheels = [
 
 [[package]]
 name = "skynet-consolidation"
-version = "2026.4.11"
+version = "2026.4.12"
 source = { editable = "packages/skynet-consolidation" }
 
 [[package]]

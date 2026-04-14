@@ -209,21 +209,44 @@ def summarise_prompt(
 ) -> str:
     """Build the prompt for a consolidation call.
 
+    Members may mix compression levels: level-0 entries are raw
+    captures in the user's own words, higher-level entries are
+    prior summaries that were themselves produced by an earlier
+    consolidation run. The prompt splits them into two buckets
+    ("prior summaries" and "new raw evidence") so the LLM knows
+    to INTEGRATE rather than flatten — the output should preserve
+    the prior summary's framing while absorbing novel raw content.
+
+    Members without `compression_level` are treated as level 0
+    (backwards compatible with callers that don't track it yet).
+
     Kept standalone so tests can pin on its shape and the atlas
     formulas catalog can render it verbatim alongside the
     classify_edge prompt.
     """
+    raws: list[dict] = []
+    summaries: list[dict] = []
+    for m in members:
+        level = int(m.get("compression_level") or 0)
+        if level >= 1:
+            summaries.append(m)
+        else:
+            raws.append(m)
+
     lines = [
-        "You are consolidating a tight cluster of closely-related memories",
-        "from a personal knowledge base into a single summary note.",
-        "Write ONE paragraph that:",
+        "You are consolidating a cluster of related memories from a",
+        "personal knowledge base. Some inputs are RAW captures in the",
+        "user's own words; others are PRIOR SUMMARIES produced by a",
+        "previous consolidation pass. Your job is to INTEGRATE both,",
+        "producing a single denser summary that:",
         "- preserves the user's own vocabulary and voice",
         "- does NOT invent facts; if members disagree, say so explicitly",
-        "- captures what is common across members + what is novel in any one",
+        "- folds the new raw evidence into the prior summaries' framing",
+        "  when summaries are present (don't re-start from scratch)",
         "- stays under 1000 characters",
-        "Then identify which input ids are FULLY captured by the summary",
-        "(safe to archive) versus which still carry unique signal and must",
-        "stay live. Flag contradictions as pairs.",
+        "Then identify which input ids are FULLY captured by the new",
+        "summary (safe to archive) versus which still carry unique",
+        "signal and must stay live. Flag contradictions as pairs.",
         "",
         "Return STRICT JSON:",
         "{",
@@ -232,10 +255,18 @@ def summarise_prompt(
         '  "contradictions": [{"id_a": "<id>", "id_b": "<id>", "explanation": "..."}],',
         '  "confidence": 0.0-1.0',
         "}",
-        "",
-        "Cluster members:",
     ]
-    for m in members:
+    if summaries:
+        lines.append("")
+        lines.append("Prior summaries (keep their framing, integrate new evidence):")
+        for m in summaries:
+            mid = m.get("id")
+            level = int(m.get("compression_level") or 0)
+            text = (m.get("text") or "")[:MEMBER_TEXT_CAP]
+            lines.append(f"- id={mid} level={level}: {text}")
+    lines.append("")
+    lines.append("Raw evidence (level-0 captures to absorb):" if summaries else "Cluster members:")
+    for m in raws:
         mid = m.get("id")
         text = (m.get("text") or "")[:MEMBER_TEXT_CAP]
         lines.append(f"- id={mid}: {text}")
