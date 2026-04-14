@@ -19,6 +19,7 @@ skynet-matrix = { workspace = true }
 skynet-scoring = { workspace = true }
 skynet-graph = { workspace = true }
 skynet-retrieval = { workspace = true }
+skynet-consolidation = { workspace = true }
 
 [dependency-groups]
 dev = [
