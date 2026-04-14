@@ -89,6 +89,25 @@ DEFAULT_LAMBDAS: dict[str, float] = {
 # upward) gives at most ~3x. Do not advertise "5x" externally.
 SALIENCE_MODULATION_STRENGTH = float(os.getenv("SALIENCE_MODULATION_STRENGTH", "0.8"))
 
+# Phase 9 — gradient compression dampens decay. Symmetric to the
+# Phase 5 storage rule that high compression_level requires more
+# pressure to budge: high compression_level should also decay slower
+# in retrieval. A summary that compressed N raws is more "knowledge"
+# than "event" and deserves a longer retention curve.
+#
+#   lam_eff = lam * 1 / (1 + compression_level * COMPRESSION_DAMPENING)
+#
+# At dampening 0.4:
+#   level 0  → lam_eff / lam = 1.00 (raw, full decay)
+#   level 1  → 0.71 (~40% longer half-life)
+#   level 2  → 0.56 (~80% longer)
+#   level 3  → 0.45 (~120% longer)
+#
+# This stacks multiplicatively with salience modulation: a salient
+# level-2 summary decays slower than a non-salient level-2, which
+# decays slower than a level-0 raw of equal salience.
+COMPRESSION_DAMPENING = float(os.getenv("COMPRESSION_DAMPENING", "0.4"))
+
 # Cosine threshold above which a retrieval "match" counts toward
 # missed_opportunities if the point didn't make the final top-K.
 # Lower -> more events count as misses -> faster decay of points
@@ -107,16 +126,30 @@ def _resolve_lambda(
     return src.get("raw", LAMBDA_RAW)
 
 
-def _effective_lambda(lam: float, salience: float) -> float:
-    """Modulate the base lambda by per-point salience.
+def _effective_lambda(lam: float, salience: float, compression_level: int = 0) -> float:
+    """Modulate the base lambda by per-point salience AND compression level.
 
-    Clamps salience to [0, 1] first so a corrupt payload can't invert
-    the sign. Returns the unmodulated lambda when strength is zero.
+    Two independent multiplicative dampens stack here:
+      1. Salience: explicit per-point importance flag → up to ~3x
+         longer half-life when salience=1.
+      2. Compression level: higher-level summaries decay slower
+         (Phase 9 coupling — symmetric to the Phase 5 storage rule
+         that higher levels are also harder to recompress).
+
+    Clamps salience to [0, 1] and treats negative compression_level
+    as 0 so a corrupt payload can't invert any sign.
     """
-    if SALIENCE_MODULATION_STRENGTH <= 0:
-        return lam
-    s = max(0.0, min(1.0, float(salience)))
-    return lam * (1.0 - s * SALIENCE_MODULATION_STRENGTH)
+    if SALIENCE_MODULATION_STRENGTH > 0:
+        s = max(0.0, min(1.0, float(salience)))
+        lam = lam * (1.0 - s * SALIENCE_MODULATION_STRENGTH)
+    if COMPRESSION_DAMPENING > 0:
+        try:
+            level = max(0, int(compression_level))
+        except (TypeError, ValueError):
+            level = 0
+        if level > 0:
+            lam = lam / (1.0 + level * COMPRESSION_DAMPENING)
+    return lam
 
 
 def compute_decay_factor_logical(
@@ -154,7 +187,8 @@ def compute_decay_factor_logical(
         return 1.0
 
     salience = default_salience_for(payload)
-    lam_eff = _effective_lambda(lam, salience)
+    compression_level = payload.get("compression_level") or 0
+    lam_eff = _effective_lambda(lam, salience, compression_level)
     if lam_eff <= 0:
         return 1.0
 

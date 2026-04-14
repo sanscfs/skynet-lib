@@ -674,7 +674,7 @@ source = { editable = "packages/skynet-retrieval" }
 
 [[package]]
 name = "skynet-scoring"
-version = "2026.4.5"
+version = "2026.4.13"
 source = { editable = "packages/skynet-scoring" }
 
 [[package]]

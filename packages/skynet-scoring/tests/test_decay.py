@@ -118,6 +118,52 @@ def test_logical_salience_slows_decay():
     assert compute_decay_factor_logical(high_salience) > compute_decay_factor_logical(default_salience)
 
 
+def test_logical_compression_level_slows_decay():
+    """Phase 9: higher compression_level dampens decay so summaries
+    survive retrieval pressure longer than the raws they replaced."""
+    base = {"memory_class": "raw", "missed_opportunities": 100, "salience": 0.5}
+    level_0 = {**base, "compression_level": 0}
+    level_2 = {**base, "compression_level": 2}
+    level_5 = {**base, "compression_level": 5}
+    f0 = compute_decay_factor_logical(level_0)
+    f2 = compute_decay_factor_logical(level_2)
+    f5 = compute_decay_factor_logical(level_5)
+    # Strict monotonic: more compression = less decay.
+    assert f5 > f2 > f0
+
+
+def test_logical_compression_dampening_stacks_with_salience():
+    """Both modulators apply multiplicatively, so a salient level-2
+    summary decays slower than a non-salient level-2 (which already
+    decays slower than a level-0)."""
+    base = {"memory_class": "raw", "missed_opportunities": 100}
+    plain_l0 = {**base, "salience": 0.5, "compression_level": 0}
+    salient_l0 = {**base, "salience": 0.95, "compression_level": 0}
+    plain_l2 = {**base, "salience": 0.5, "compression_level": 2}
+    salient_l2 = {**base, "salience": 0.95, "compression_level": 2}
+    f_plain_l0 = compute_decay_factor_logical(plain_l0)
+    f_salient_l0 = compute_decay_factor_logical(salient_l0)
+    f_plain_l2 = compute_decay_factor_logical(plain_l2)
+    f_salient_l2 = compute_decay_factor_logical(salient_l2)
+    assert f_salient_l2 > f_plain_l2 > f_plain_l0
+    assert f_salient_l2 > f_salient_l0
+
+
+def test_logical_compression_handles_garbage():
+    """Corrupt compression_level (None / negative / string) collapses
+    to level 0 — never raises, never inverts the dampen direction."""
+    base = {"memory_class": "raw", "missed_opportunities": 50, "salience": 0.5}
+    f_baseline = compute_decay_factor_logical({**base, "compression_level": 0})
+    for bad in [None, -3, "garbage", 0.5]:
+        f = compute_decay_factor_logical({**base, "compression_level": bad})
+        # All garbage clamps to 0 → same factor as explicit 0.
+        if bad in (0.5,):
+            # 0.5 → int(0.5) = 0, same as level 0.
+            assert f == f_baseline
+        else:
+            assert f == f_baseline
+
+
 def test_logical_explicit_lambda_override():
     # Caller-supplied lambdas take precedence over env defaults.
     payload = {"memory_class": "raw", "missed_opportunities": 100, "salience": 0.0}
