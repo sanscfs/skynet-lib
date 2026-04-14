@@ -7,4 +7,4 @@ skynet-matrix>=2026.4.2
 skynet-scoring>=2026.4.5
 skynet-graph[louvain]>=2026.4.10
 skynet-retrieval>=2026.4.8
-skynet-consolidation>=2026.4.11
+skynet-consolidation>=2026.4.12
