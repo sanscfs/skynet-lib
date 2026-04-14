@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
+
 from skynet_consolidation import ConsolidationResult, Contradiction, consolidate_clique
 from skynet_consolidation.consolidate import (
     MAX_MEMBERS,
     MEMBER_TEXT_CAP,
+    _coerce_bool,
     _coerce_confidence,
     _coerce_id_list,
+    _coerce_optional_string,
     _parse_response,
     summarise_prompt,
 )
@@ -216,3 +220,138 @@ def test_coerce_confidence_handles_garbage():
 def test_coerce_id_list_round_trips_int_strings():
     # LLM often returns stringified ids even when input was int.
     assert _coerce_id_list([42, "1"], {1, "1", 42, "42"}) == [42, "1"]
+
+
+# --- Phase 12.5 actionable intent extraction ----------------------------
+
+
+def test_prompt_asks_for_actionable_fields():
+    """Prompt must ask the LLM for the three Phase 12.5 JSON keys so
+    downstream active-memory DAG has something to read."""
+    p = summarise_prompt([_m("a", "x"), _m("b", "y")])
+    assert '"actionable": true|false' in p
+    assert '"action_type"' in p
+    assert '"action_description"' in p
+    # Prompt must also tell the LLM when to set actionable=true vs false.
+    assert "remind me" in p
+    assert "actionable=false" in p
+
+
+def test_parse_actionable_positive_case():
+    """Clear intent → LLM returns actionable=true with description."""
+    r = _parse_response(
+        '{"summary": "user wants to water plants weekly",'
+        ' "confidence": 0.9,'
+        ' "actionable": true,'
+        ' "action_type": "recurring_reminder",'
+        ' "action_description": "Remind me weekly to water the plants"}',
+        _valid_ids("a", "b"),
+    )
+    assert r.actionable is True
+    assert r.action_type == "recurring_reminder"
+    assert r.action_description == "Remind me weekly to water the plants"
+
+
+def test_parse_actionable_negative_case():
+    """Mere observation → LLM returns actionable=false, fields null."""
+    r = _parse_response(
+        '{"summary": "user enjoys gardening",'
+        ' "confidence": 0.8,'
+        ' "actionable": false,'
+        ' "action_type": null,'
+        ' "action_description": null}',
+        _valid_ids("a", "b"),
+    )
+    assert r.actionable is False
+    assert r.action_type is None
+    assert r.action_description is None
+
+
+def test_parse_actionable_malformed_defaults_to_false():
+    """Non-bool actionable ('maybe', 'yes', 1) → False. Conservative
+    default keeps Phase 12 from proposing on garbage input."""
+    for bad in ("maybe", "yes", "1", 1, None):
+        r = _parse_response(
+            '{"summary":"x","confidence":0.5,"actionable":'
+            + json.dumps(bad)
+            + "}",
+            _valid_ids("a"),
+        )
+        assert r.actionable is False, f"expected False for {bad!r}"
+        assert r.action_type is None
+        assert r.action_description is None
+
+
+def test_parse_actionable_true_but_empty_description_downgrades():
+    """actionable=true with blank/missing description is not usable by
+    Phase 12 (empty Matrix prompt). Library downgrades the whole block
+    to not-actionable so to_payload() doesn't emit a half-set record."""
+    r = _parse_response(
+        '{"summary":"x","confidence":0.5,"actionable":true,'
+        '"action_type":"recurring_reminder","action_description":""}',
+        _valid_ids("a"),
+    )
+    assert r.actionable is False
+    assert r.action_type is None
+    assert r.action_description is None
+
+
+def test_parse_missing_actionable_fields_backward_compat():
+    """Old LLM responses without the three new keys must still parse
+    and default to not-actionable. This protects against staged
+    rollouts where the prompt bump hasn't reached every worker yet."""
+    r = _parse_response(
+        '{"summary": "merged", "discarded_ids": [], "confidence": 0.6}',
+        _valid_ids("a"),
+    )
+    assert r.summary == "merged"
+    assert r.actionable is False
+    assert r.action_type is None
+    assert r.action_description is None
+
+
+def test_to_payload_omits_actionable_when_false():
+    """Non-actionable summaries keep the payload lean — no three null
+    keys on every consolidation."""
+    res = ConsolidationResult(summary="s", confidence=0.5)
+    payload = res.to_payload()
+    assert "actionable" not in payload
+    assert "action_type" not in payload
+    assert "action_description" not in payload
+
+
+def test_to_payload_includes_actionable_when_true():
+    """Actionable=true serialises all three fields so the DAG can
+    merge them into the Qdrant summary payload."""
+    res = ConsolidationResult(
+        summary="s",
+        confidence=0.9,
+        actionable=True,
+        action_type="recurring_reminder",
+        action_description="Remind me weekly to check humidity",
+    )
+    payload = res.to_payload()
+    assert payload["actionable"] is True
+    assert payload["action_type"] == "recurring_reminder"
+    assert payload["action_description"] == "Remind me weekly to check humidity"
+
+
+def test_coerce_bool_strict():
+    assert _coerce_bool(True) is True
+    assert _coerce_bool("true") is True
+    assert _coerce_bool("TRUE") is True
+    assert _coerce_bool(False) is False
+    assert _coerce_bool("false") is False
+    assert _coerce_bool("yes") is False
+    assert _coerce_bool(1) is False
+    assert _coerce_bool(None) is False
+
+
+def test_coerce_optional_string_handles_blanks():
+    assert _coerce_optional_string(None) is None
+    assert _coerce_optional_string("") is None
+    assert _coerce_optional_string("   ") is None
+    assert _coerce_optional_string(42) is None
+    assert _coerce_optional_string("hello") == "hello"
+    # Cap enforced.
+    assert _coerce_optional_string("x" * 1000, cap=50) == "x" * 50

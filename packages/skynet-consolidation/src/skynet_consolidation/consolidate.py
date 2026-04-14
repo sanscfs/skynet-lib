@@ -91,6 +91,13 @@ class ConsolidationResult:
       high — conflict is a signal to surface, not a failure.
     - `confidence` ∈ [0.0, 1.0]. Caller decides the auto-commit
       threshold; the library doesn't pre-judge.
+    - `actionable`, `action_type`, `action_description` are the
+      Phase 12.5 intent-extraction fields. True only when the LLM
+      sees a CLEAR user intent to do something recurring/scheduled
+      in the clique; the Phase 12 `skynet_active_memory` DAG reads
+      them off the summary payload and proposes via Matrix. Empty
+      `action_description` downgrades the signal to not-actionable
+      on the DAG side — no description, no proposal.
     - `raw_response` is kept for telemetry / debugging when the
       parser falls back.
     """
@@ -99,11 +106,19 @@ class ConsolidationResult:
     discarded_ids: list[Any] = field(default_factory=list)
     contradictions: list[Contradiction] = field(default_factory=list)
     confidence: float = 0.0
+    actionable: bool = False
+    action_type: str | None = None
+    action_description: str | None = None
     raw_response: str = ""
 
     def to_payload(self) -> dict:
-        """Serialise for Qdrant payload on the DAG side."""
-        return {
+        """Serialise for Qdrant payload on the DAG side.
+
+        Actionable fields are only emitted when `actionable=True` so
+        non-actionable consolidations don't bloat every summary
+        payload with three null keys.
+        """
+        payload: dict = {
             "summary": self.summary,
             "discarded_ids": [str(i) for i in self.discarded_ids],
             "contradictions": [
@@ -111,6 +126,11 @@ class ConsolidationResult:
             ],
             "confidence": round(max(0.0, min(1.0, self.confidence)), 4),
         }
+        if self.actionable:
+            payload["actionable"] = True
+            payload["action_type"] = self.action_type
+            payload["action_description"] = self.action_description
+        return payload
 
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -130,6 +150,37 @@ def _coerce_string(raw: Any, cap: int = 2000) -> str:
     if not isinstance(raw, str):
         return ""
     return raw.strip()[:cap]
+
+
+def _coerce_bool(raw: Any) -> bool:
+    """Only JSON true / Python True / case-insensitive 'true' count.
+
+    Anything else (int, 'yes', None, malformed) → False. The Phase
+    12.5 intent-extraction field MUST be conservative: when in doubt,
+    no proposal. A bogus 'actionable': 'maybe' should never leak into
+    the active-memory DAG.
+    """
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() == "true"
+    return False
+
+
+def _coerce_optional_string(raw: Any, cap: int = 500) -> str | None:
+    """Parse an optional string field: None / empty / non-string → None.
+
+    Used for `action_type` and `action_description` where "this wasn't
+    set" is a valid outcome and must not collapse to empty-string.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    return s[:cap]
 
 
 def _coerce_id_list(raw: Any, valid_ids: set) -> list[Any]:
@@ -194,11 +245,25 @@ def _parse_response(text: str, valid_ids: set) -> ConsolidationResult:
     discarded = _coerce_id_list(parsed.get("discarded_ids"), valid_ids)
     contradictions = _coerce_contradictions(parsed.get("contradictions"), valid_ids)
     confidence = _coerce_confidence(parsed.get("confidence"))
+    actionable = _coerce_bool(parsed.get("actionable"))
+    action_type = _coerce_optional_string(parsed.get("action_type"), cap=80)
+    action_description = _coerce_optional_string(parsed.get("action_description"), cap=400)
+    # Defence-in-depth: an empty or missing description downgrades
+    # actionable→false so Phase 12 never proposes a blank suggestion.
+    # The DAG applies the same rule independently; this is the library
+    # mirror so `to_payload()` doesn't emit a half-populated block.
+    if actionable and not action_description:
+        actionable = False
+        action_type = None
+        action_description = None
     return ConsolidationResult(
         summary=summary,
         discarded_ids=discarded,
         contradictions=contradictions,
         confidence=confidence,
+        actionable=actionable,
+        action_type=action_type,
+        action_description=action_description,
         raw_response=raw[:2000],
     )
 
@@ -248,12 +313,31 @@ def summarise_prompt(
         "summary (safe to archive) versus which still carry unique",
         "signal and must stay live. Flag contradictions as pairs.",
         "",
+        "ALSO inspect the clique for user INTENT. Does the user express",
+        "a CLEAR intent to do something recurring or scheduled — a",
+        "reminder, a checkup, a follow-up action? Trigger phrases:",
+        '"I should...", "remind me...", "I want to...", "треба...",',
+        '"щотижня...", "I plan to..."; NOT mere interest or observation',
+        '("I enjoy X", "X is nice", "I read about Y"). If unclear,',
+        "leave actionable=false. Prefer these free-form action_type tags:",
+        '  "recurring_reminder" — repeated prompt (weekly/daily checkup)',
+        '  "one_time_action"   — single task the user meant to do',
+        '  "scheduled_checkup" — periodic review of a topic',
+        "action_description must be ONE imperative sentence the",
+        "downstream system can quote back to the user verbatim",
+        "(e.g. \"Remind me weekly to check grow tent humidity\"). If",
+        "actionable is false, set action_type and action_description",
+        "to null.",
+        "",
         "Return STRICT JSON:",
         "{",
         '  "summary": "<paragraph>",',
         '  "discarded_ids": ["<id>", ...],',
         '  "contradictions": [{"id_a": "<id>", "id_b": "<id>", "explanation": "..."}],',
-        '  "confidence": 0.0-1.0',
+        '  "confidence": 0.0-1.0,',
+        '  "actionable": true|false,',
+        '  "action_type": "<short kind tag or null>",',
+        '  "action_description": "<one imperative sentence or null>"',
         "}",
     ]
     if summaries:

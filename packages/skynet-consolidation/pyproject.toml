@@ -1,6 +1,6 @@
 [project]
 name = "skynet-consolidation"
-version = "2026.4.12"
+version = "2026.4.13"
 description = "Skynet memory consolidation: merge mature cliques into summary points with provenance"
 requires-python = ">=3.12"
 dependencies = []
