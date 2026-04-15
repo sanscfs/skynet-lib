@@ -272,9 +272,7 @@ def test_parse_actionable_malformed_defaults_to_false():
     default keeps Phase 12 from proposing on garbage input."""
     for bad in ("maybe", "yes", "1", 1, None):
         r = _parse_response(
-            '{"summary":"x","confidence":0.5,"actionable":'
-            + json.dumps(bad)
-            + "}",
+            '{"summary":"x","confidence":0.5,"actionable":' + json.dumps(bad) + "}",
             _valid_ids("a"),
         )
         assert r.actionable is False, f"expected False for {bad!r}"
@@ -287,8 +285,7 @@ def test_parse_actionable_true_but_empty_description_downgrades():
     Phase 12 (empty Matrix prompt). Library downgrades the whole block
     to not-actionable so to_payload() doesn't emit a half-set record."""
     r = _parse_response(
-        '{"summary":"x","confidence":0.5,"actionable":true,'
-        '"action_type":"recurring_reminder","action_description":""}',
+        '{"summary":"x","confidence":0.5,"actionable":true,"action_type":"recurring_reminder","action_description":""}',
         _valid_ids("a"),
     )
     assert r.actionable is False

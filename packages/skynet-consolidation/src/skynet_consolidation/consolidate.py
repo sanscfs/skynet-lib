@@ -325,7 +325,7 @@ def summarise_prompt(
         '  "scheduled_checkup" — periodic review of a topic',
         "action_description must be ONE imperative sentence the",
         "downstream system can quote back to the user verbatim",
-        "(e.g. \"Remind me weekly to check grow tent humidity\"). If",
+        '(e.g. "Remind me weekly to check grow tent humidity"). If',
         "actionable is false, set action_type and action_description",
         "to null.",
         "",
