@@ -538,12 +538,12 @@ wheels = [
 
 [[package]]
 name = "skynet-consolidation"
-version = "2026.4.12"
+version = "2026.4.13"
 source = { editable = "packages/skynet-consolidation" }
 
 [[package]]
 name = "skynet-core"
-version = "2026.4.2"
+version = "2026.4.3"
 source = { editable = "packages/skynet-core" }
 dependencies = [
     { name = "opentelemetry-api" },
