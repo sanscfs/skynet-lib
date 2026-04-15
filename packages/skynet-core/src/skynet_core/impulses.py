@@ -44,14 +44,14 @@ logger = logging.getLogger(__name__)
 # --- schema ------------------------------------------------------------
 
 SignalKind = Literal[
-    "novelty",             # collectors/analyzer detected something new/out-of-distribution
-    "concern",             # bad alert / incident / health regression / silence-with-anomaly
-    "resolution",          # a prior concern was closed (damps the concern drive)
-    "trait_drift",         # profile-synthesis detected a shift in a user trait
-    "memory_activation",   # identity surfaced a hot-but-unmentioned point during retrieval
-    "unfinished",          # a parked topic / pending question is still open
-    "spoke",               # the agent itself just posted (self-feedback, dampens need_to_share)
-    "silenced",            # user asked the agent to be quiet (bumps refractory)
+    "novelty",  # collectors/analyzer detected something new/out-of-distribution
+    "concern",  # bad alert / incident / health regression / silence-with-anomaly
+    "resolution",  # a prior concern was closed (damps the concern drive)
+    "trait_drift",  # profile-synthesis detected a shift in a user trait
+    "memory_activation",  # identity surfaced a hot-but-unmentioned point during retrieval
+    "unfinished",  # a parked topic / pending question is still open
+    "spoke",  # the agent itself just posted (self-feedback, dampens need_to_share)
+    "silenced",  # user asked the agent to be quiet (bumps refractory)
 ]
 
 SignalSource = Literal[
@@ -62,7 +62,7 @@ SignalSource = Literal[
     "sre",
     "alert-bridge",
     "self",
-    "external",            # one-off DAG / script / manual injection
+    "external",  # one-off DAG / script / manual injection
 ]
 
 STREAM_NAME = "skynet:impulses"
@@ -226,7 +226,11 @@ async def drain_signals(
     client = async_redis or get_async_redis()
     # ">" = only entries never delivered to any consumer in this group.
     resp = await client.xreadgroup(
-        group, consumer, streams={stream: ">"}, count=count, block=block_ms,
+        group,
+        consumer,
+        streams={stream: ">"},
+        count=count,
+        block=block_ms,
     )
     out: list[tuple[str, Signal]] = []
     if not resp:
@@ -238,7 +242,9 @@ async def drain_signals(
             except Exception as exc:
                 logger.warning(
                     "impulses: dropping malformed entry %s (%s): %s",
-                    entry_id, exc, fields,
+                    entry_id,
+                    exc,
+                    fields,
                 )
                 try:
                     await client.xack(stream, group, entry_id)

@@ -125,13 +125,15 @@ def test_emit_signal_empty_anchor_stored_as_empty_string():
 def test_signal_from_fields_treats_empty_anchor_as_none():
     # Symmetric with the emit_signal behavior: round-trip through Redis
     # should yield anchor=None when no anchor was set.
-    restored = Signal.from_fields({
-        "kind": "spoke",
-        "source": "self",
-        "salience": "0.3",
-        "anchor": "",
-        "payload": "{}",
-        "ts_logical": "1234567",
-        "id": "abc123",
-    })
+    restored = Signal.from_fields(
+        {
+            "kind": "spoke",
+            "source": "self",
+            "salience": "0.3",
+            "anchor": "",
+            "payload": "{}",
+            "ts_logical": "1234567",
+            "id": "abc123",
+        }
+    )
     assert restored.anchor is None
