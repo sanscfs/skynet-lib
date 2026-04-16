@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any
 
 import httpx
 
@@ -82,6 +83,53 @@ class AsyncMatrixClient:
             logger.warning("Matrix async send_text failed: %s", e)
         return None
 
+    async def send_in_thread(
+        self,
+        room_id: str,
+        body: str,
+        thread_root: str,
+        *,
+        formatted_body: str | None = None,
+        msgtype: str = "m.text",
+    ) -> str | None:
+        """Send a message as part of a Matrix thread (MSC3440).
+
+        Args:
+            room_id: Target room.
+            body: Plain text body.
+            thread_root: event_id of the thread root message.
+            formatted_body: Optional HTML body.
+            msgtype: Message type (default ``m.text``).
+
+        Returns:
+            event_id of the sent message, or ``None`` on failure.
+        """
+        txn = self._next_txn()
+        url = f"/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn}"
+        content: dict[str, Any] = {
+            "msgtype": msgtype,
+            "body": body,
+            "m.relates_to": {
+                "rel_type": "m.thread",
+                "event_id": thread_root,
+                "is_falling_back": True,
+                "m.in_reply_to": {"event_id": thread_root},
+            },
+        }
+        if formatted_body:
+            content["format"] = "org.matrix.custom.html"
+            content["formatted_body"] = formatted_body
+
+        try:
+            client = await self._get_client()
+            resp = await client.put(url, json=content)
+            if resp.is_success:
+                return resp.json().get("event_id")
+            logger.warning("Matrix async send_in_thread %s -> %s", room_id, resp.status_code)
+        except Exception as e:
+            logger.warning("Matrix async send_in_thread failed: %s", e)
+        return None
+
     async def edit_message(self, room_id: str, event_id: str, new_body: str) -> str | None:
         """Edit an existing message."""
         txn = self._next_txn()
@@ -100,6 +148,68 @@ class AsyncMatrixClient:
         except Exception as e:
             logger.warning("Matrix async edit failed: %s", e)
         return None
+
+    async def edit_in_thread(
+        self,
+        room_id: str,
+        event_id: str,
+        new_body: str,
+        thread_root: str,
+        *,
+        formatted_body: str | None = None,
+    ) -> bool:
+        """Edit a message that lives inside a Matrix thread.
+
+        Matrix edits in threads carry both ``m.replace`` (for the edit)
+        and ``m.thread`` (so clients keep the message in the thread view).
+        The thread relation is placed on ``m.new_content`` as recommended
+        by MSC3440.
+
+        Args:
+            room_id: Target room.
+            event_id: event_id of the message to edit.
+            new_body: Replacement plain text body.
+            thread_root: event_id of the thread root message.
+            formatted_body: Optional replacement HTML body.
+
+        Returns:
+            ``True`` if the edit was accepted by the server.
+        """
+        txn = self._next_txn()
+        url = f"/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn}"
+        content: dict[str, Any] = {
+            "msgtype": "m.text",
+            "body": f"* {new_body}",
+            "m.new_content": {
+                "msgtype": "m.text",
+                "body": new_body,
+                "m.relates_to": {
+                    "rel_type": "m.thread",
+                    "event_id": thread_root,
+                    "is_falling_back": True,
+                    "m.in_reply_to": {"event_id": thread_root},
+                },
+            },
+            "m.relates_to": {
+                "rel_type": "m.replace",
+                "event_id": event_id,
+            },
+        }
+        if formatted_body:
+            content["m.new_content"]["format"] = "org.matrix.custom.html"
+            content["m.new_content"]["formatted_body"] = formatted_body
+            content["format"] = "org.matrix.custom.html"
+            content["formatted_body"] = f"* {formatted_body}"
+
+        try:
+            client = await self._get_client()
+            resp = await client.put(url, json=content)
+            if resp.is_success:
+                return True
+            logger.warning("Matrix async edit_in_thread %s -> %s", room_id, resp.status_code)
+        except Exception as e:
+            logger.warning("Matrix async edit_in_thread failed: %s", e)
+        return False
 
     async def send_reaction(self, room_id: str, event_id: str, emoji: str) -> str | None:
         """Send an emoji reaction."""
@@ -141,3 +251,49 @@ class AsyncMatrixClient:
         except Exception as e:
             logger.warning("Matrix async sync failed: %s", e)
         return {}
+
+    @staticmethod
+    def parse_timeline_messages(sync_response: dict) -> list[dict[str, Any]]:
+        """Extract text messages from a sync response with thread metadata.
+
+        Returns a list of dicts, each containing:
+            - ``room_id``: the room the message was sent to
+            - ``event_id``: the Matrix event id
+            - ``sender``: full Matrix user id
+            - ``body``: plain text body
+            - ``msgtype``: e.g. ``m.text``
+            - ``thread_root``: event_id of the thread root, or ``None``
+            - ``content``: the full event content dict
+
+        Only ``m.room.message`` events are included; redactions, state
+        events, etc. are skipped.
+        """
+        results: list[dict[str, Any]] = []
+        rooms = sync_response.get("rooms", {}).get("join", {})
+        for room_id, room_data in rooms.items():
+            timeline = room_data.get("timeline", {}).get("events", [])
+            for event in timeline:
+                if event.get("type") != "m.room.message":
+                    continue
+                event_content = event.get("content", {})
+                # Skip edits -- they have rel_type m.replace
+                relates = event_content.get("m.relates_to", {})
+                if relates.get("rel_type") == "m.replace":
+                    continue
+
+                thread_root: str | None = None
+                if relates.get("rel_type") == "m.thread":
+                    thread_root = relates.get("event_id")
+
+                results.append(
+                    {
+                        "room_id": room_id,
+                        "event_id": event.get("event_id", ""),
+                        "sender": event.get("sender", ""),
+                        "body": event_content.get("body", ""),
+                        "msgtype": event_content.get("msgtype", ""),
+                        "thread_root": thread_root,
+                        "content": event_content,
+                    }
+                )
+        return results
