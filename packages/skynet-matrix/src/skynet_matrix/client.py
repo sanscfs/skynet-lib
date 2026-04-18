@@ -47,16 +47,30 @@ class MatrixClient:
         body: str,
         *,
         reply_to: str | None = None,
+        thread_root: str | None = None,
         extra_content: dict | None = None,
     ) -> str | None:
-        """Send a text message. Returns the event_id or None on failure."""
+        """Send a text message. Returns the event_id or None on failure.
+
+        Args:
+            reply_to: event_id to reply to (in-reply-to, no thread).
+            thread_root: event_id of the thread root. Creates/continues
+                a Matrix thread. Takes precedence over reply_to.
+        """
         txn = self._next_txn()
         url = f"{self.homeserver_url}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn}"
         content: dict = {
             "msgtype": "m.text",
             "body": body,
         }
-        if reply_to:
+        if thread_root:
+            content["m.relates_to"] = {
+                "rel_type": "m.thread",
+                "event_id": thread_root,
+                "is_falling_back": True,
+                "m.in_reply_to": {"event_id": thread_root},
+            }
+        elif reply_to:
             content["m.relates_to"] = {
                 "m.in_reply_to": {"event_id": reply_to},
             }
