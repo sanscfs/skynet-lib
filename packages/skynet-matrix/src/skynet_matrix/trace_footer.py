@@ -74,9 +74,7 @@ def format_trace_footer(
         parts.append(f"\u23f1{duration_s:.1f}s")
 
     if prompt_tokens or completion_tokens:
-        parts.append(
-            f"\U0001f4ca{_fmt_tokens(prompt_tokens)}\u2192{_fmt_tokens(completion_tokens)}tok"
-        )
+        parts.append(f"\U0001f4ca{_fmt_tokens(prompt_tokens)}\u2192{_fmt_tokens(completion_tokens)}tok")
 
     if steps:
         step_parts = [f"{s['name']} {s['duration_s']:.1f}s" for s in steps if s.get("duration_s", 0) > 0.05]
@@ -88,9 +86,7 @@ def format_trace_footer(
         parts.append(f"\U0001f4ce{src}")
 
     if tools_used:
-        tools = ", ".join(
-            t.split("__")[-1] if "__" in t else t for t in tools_used[:3]
-        )
+        tools = ", ".join(t.split("__")[-1] if "__" in t else t for t in tools_used[:3])
         parts.append(f"\U0001f527{tools}")
 
     if cost_usd > 0:
