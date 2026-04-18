@@ -1,6 +1,7 @@
 """Skynet Core -- shared foundation for all Skynet components."""
 
 from skynet_core.config import SkynetConfig
+from skynet_core.conversation import conv_append, conv_compact, conv_key, conv_load
 from skynet_core.impulses import (
     DEFAULT_CONSUMER_GROUP,
     DEFAULT_MAXLEN,
@@ -15,7 +16,6 @@ from skynet_core.impulses import (
     emit_signal_async,
     ensure_consumer_group,
 )
-from skynet_core.conversation import conv_append, conv_compact, conv_key, conv_load
 from skynet_core.logging import setup_logging
 from skynet_core.redis import get_async_redis, get_redis
 from skynet_core.tracing import get_tracer, setup_tracing
