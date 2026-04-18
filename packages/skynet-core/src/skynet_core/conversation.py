@@ -28,8 +28,7 @@ def conv_key(room_id: str, thread_root: str | None = None) -> str:
     return f"skynet:conv:{room_id}:main"
 
 
-def conv_load(room_id: str, thread_root: str | None = None,
-              max_messages: int | None = None) -> list[dict]:
+def conv_load(room_id: str, thread_root: str | None = None, max_messages: int | None = None) -> list[dict]:
     """Load conversation history from Redis.
 
     Returns only entries with ctx=True (default). System notifications,
@@ -53,10 +52,15 @@ def conv_load(room_id: str, thread_root: str | None = None,
         return []
 
 
-def conv_append(room_id: str, role: str, content: str, sender: str = "",
-                thread_root: str | None = None,
-                include_in_context: bool = True,
-                max_messages: int | None = None) -> None:
+def conv_append(
+    room_id: str,
+    role: str,
+    content: str,
+    sender: str = "",
+    thread_root: str | None = None,
+    include_in_context: bool = True,
+    max_messages: int | None = None,
+) -> None:
     """Append a message to conversation history.
 
     Args:
@@ -70,21 +74,24 @@ def conv_append(room_id: str, role: str, content: str, sender: str = "",
     try:
         r = get_redis()
         key = conv_key(room_id, thread_root)
-        entry = json.dumps({
-            "role": role,
-            "content": content[:20000],
-            "sender": sender,
-            "ts": int(time.time()),
-            "ctx": include_in_context,
-        })
+        entry = json.dumps(
+            {
+                "role": role,
+                "content": content[:20000],
+                "sender": sender,
+                "ts": int(time.time()),
+                "ctx": include_in_context,
+            }
+        )
         r.lpush(key, entry)
         r.ltrim(key, 0, max_msg - 1)
     except Exception as e:
         logger.warning("conv_append failed: %s", e)
 
 
-def conv_compact(room_id: str, thread_root: str | None = None,
-                 summarize_fn: Callable[[str], str] | None = None) -> None:
+def conv_compact(
+    room_id: str, thread_root: str | None = None, summarize_fn: Callable[[str], str] | None = None
+) -> None:
     """Compact old messages into a summary when conversation exceeds threshold.
 
     Args:
@@ -112,8 +119,7 @@ def conv_compact(room_id: str, thread_root: str | None = None,
         if not old_msgs:
             return
 
-        lines = [f"{m.get('role', '?')}: {m.get('content', '')[:200]}"
-                 for m in old_msgs]
+        lines = [f"{m.get('role', '?')}: {m.get('content', '')[:200]}" for m in old_msgs]
         summary_input = "\n".join(lines)
 
         if summarize_fn:
@@ -125,19 +131,21 @@ def conv_compact(room_id: str, thread_root: str | None = None,
             summary = _fallback_summary(old_msgs)
 
         r.ltrim(key, 0, CONV_COMPACT_KEEP - 1)
-        r.rpush(key, json.dumps({
-            "role": "system",
-            "content": f"[Summary of {len(old_msgs)} earlier messages]: {summary}",
-            "ts": int(time.time()),
-            "ctx": True,
-        }))
+        r.rpush(
+            key,
+            json.dumps(
+                {
+                    "role": "system",
+                    "content": f"[Summary of {len(old_msgs)} earlier messages]: {summary}",
+                    "ts": int(time.time()),
+                    "ctx": True,
+                }
+            ),
+        )
         logger.info("Compacted %d messages in %s", len(old_msgs), key)
     except Exception as e:
         logger.warning("conv_compact failed: %s", e)
 
 
 def _fallback_summary(msgs: list[dict]) -> str:
-    return "; ".join(
-        f"{m.get('role', '')}: {m.get('content', '')[:80]}"
-        for m in msgs[:10]
-    )
+    return "; ".join(f"{m.get('role', '')}: {m.get('content', '')[:80]}" for m in msgs[:10])
