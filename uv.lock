@@ -543,7 +543,7 @@ source = { editable = "packages/skynet-consolidation" }
 
 [[package]]
 name = "skynet-core"
-version = "2026.4.3"
+version = "2026.4.4"
 source = { editable = "packages/skynet-core" }
 dependencies = [
     { name = "opentelemetry-api" },
@@ -643,7 +643,7 @@ dev = [
 
 [[package]]
 name = "skynet-matrix"
-version = "2026.4.2"
+version = "2026.4.5"
 source = { editable = "packages/skynet-matrix" }
 dependencies = [
     { name = "httpx" },

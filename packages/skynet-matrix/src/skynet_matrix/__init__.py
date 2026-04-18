@@ -2,7 +2,6 @@
 
 from skynet_matrix.async_client import AsyncMatrixClient
 from skynet_matrix.client import MatrixClient
-from skynet_matrix.trace_footer import build_trace_meta, format_trace_footer
 from skynet_matrix.stream_events import (
     AGENT_MATRIX_GROUP,
     AGENT_STREAM_PREFIX,
@@ -20,6 +19,7 @@ from skynet_matrix.stream_events import (
     parse_xread_response,
     stream_key,
 )
+from skynet_matrix.trace_footer import build_trace_meta, format_trace_footer
 
 __all__ = [
     "MatrixClient",
