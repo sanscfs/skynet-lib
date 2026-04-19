@@ -50,6 +50,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from skynet_matrix.chronicle_mirror import get_mirror_client, mirror_message
 from skynet_matrix.commands import Command, HandlerCoro, parse_command_line
 from skynet_matrix.state_events import (
     STATE_EVENT_TYPE,
@@ -145,6 +146,13 @@ class CommandBot:
         # room_id -> event_id of our pinned command menu, so we can
         # idempotently edit it instead of spamming new messages.
         self._menu_message_ids: dict[str, str] = {}
+
+        # Chronicle mirror: XADDs every in/out Matrix message onto a
+        # Redis stream consumed by the Chronicle ingester. Opt-in via
+        # ``CHRONICLE_REDIS_URL`` — unset => ``None`` and all mirror
+        # calls become silent no-ops. See ``chronicle_mirror`` module
+        # for the zero-LLM guarantee.
+        self._chronicle_redis = get_mirror_client()
 
         self._register_builtin_commands()
 
@@ -299,7 +307,7 @@ class CommandBot:
                 "event_id": thread_root,
             }
         try:
-            return await self._client.room_send(
+            resp = await self._client.room_send(
                 room_id=room_id,
                 message_type="m.room.message",
                 content=content,
@@ -307,6 +315,12 @@ class CommandBot:
         except Exception as exc:
             logger.warning("post_message failed room=%s: %s", room_id, exc)
             return None
+        self._mirror_out(
+            room_id=room_id,
+            body=text,
+            event_id=getattr(resp, "event_id", "") or "",
+        )
+        return resp
 
     async def post_recommendation(
         self,
@@ -439,10 +453,89 @@ class CommandBot:
 
     # -- Dispatch (sync-loop entry points; also called directly by tests) --
 
+    @staticmethod
+    def _mxid_to_user(mxid: str) -> str:
+        """Turn ``@sanscfs:matrix.sanscfs.dev`` -> ``sanscfs``.
+
+        Used to fill the ``user`` label in Chronicle envelopes so the
+        query layer can filter by identity without parsing full MXIDs.
+        See ``project_chat_identity_fix``: user-originated rows belong
+        under ``user=sanscfs`` and bot-originated rows under
+        ``user=skynet-<component>``; everything downstream keys off that
+        distinction.
+        """
+        if not mxid:
+            return ""
+        # "@local:host" -> "local"; fall back to the raw string if the
+        # shape is unfamiliar (don't raise, this is observability glue).
+        local = mxid.split(":", 1)[0] if ":" in mxid else mxid
+        return local.lstrip("@")
+
+    def _mirror_in(self, event: Any, room_id: str) -> None:
+        """Chronicle-mirror an inbound ``m.room.message`` immediately.
+
+        Called before ``_dispatch`` so the raw text lands in Chronicle
+        even if a buggy command handler crashes, and critically BEFORE
+        any LLM / analyzer touches the body. Never raises.
+        """
+        if self._chronicle_redis is None:
+            return
+        body = getattr(event, "body", "") or ""
+        if not body:
+            return
+        sender = getattr(event, "sender", "") or ""
+        event_id = getattr(event, "event_id", "") or ""
+        ts_ms = getattr(event, "server_timestamp", None)
+        ts = (ts_ms / 1000.0) if isinstance(ts_ms, (int, float)) else time.time()
+        mirror_message(
+            self._chronicle_redis,
+            direction="in",
+            room_id=room_id,
+            sender=sender,
+            body=body,
+            event_id=event_id,
+            ts=ts,
+            user=self._mxid_to_user(sender),
+        )
+
+    def _mirror_out(
+        self,
+        *,
+        room_id: str,
+        body: str,
+        event_id: str = "",
+    ) -> None:
+        """Chronicle-mirror an outbound reply right after ``room_send`` succeeded.
+
+        ``event_id`` may be empty when nio's response didn't carry one;
+        Chronicle accepts that — the ``direction=out`` + ``user`` +
+        ``ts`` + ``body`` tuple is still enough to reconstruct the
+        transcript. Never raises.
+        """
+        if self._chronicle_redis is None or not body:
+            return
+        mirror_message(
+            self._chronicle_redis,
+            direction="out",
+            room_id=room_id,
+            sender=self.config.user_id,
+            body=body,
+            event_id=event_id or "",
+            ts=time.time(),
+            user=self.config.bot_name or self._mxid_to_user(self.config.user_id),
+        )
+
     async def handle_text_event(self, room: Any, event: Any) -> None:
         """Route an ``m.room.message`` / ``RoomMessageText`` to a command."""
         if getattr(event, "sender", None) == self.config.user_id:
             return  # never dispatch our own messages
+
+        room_id = getattr(room, "room_id", None) or getattr(event, "room_id", None)
+        # Chronicle-mirror EVERY inbound text, not just !commands.
+        # This is the "raw transcript" layer — we want the full record
+        # before any LLM / analyzer sees the message body.
+        if room_id:
+            self._mirror_in(event, room_id)
 
         body = getattr(event, "body", "") or ""
         parsed = parse_command_line(body, prefix=self.config.command_prefix)
@@ -450,7 +543,6 @@ class CommandBot:
             return
 
         cmd_name, args = parsed
-        room_id = getattr(room, "room_id", None) or getattr(event, "room_id", None)
         if not room_id:
             return
 
@@ -630,13 +722,19 @@ class CommandBot:
         # thread_root plumbing; callers who need threads should use the
         # low-level httpx AsyncMatrixClient directly.
         try:
-            await self._client.room_send(
+            resp = await self._client.room_send(
                 room_id=room_id,
                 message_type="m.room.message",
                 content=content,
             )
         except Exception as exc:
             logger.warning("room_send failed room=%s: %s", room_id, exc)
+            return
+        self._mirror_out(
+            room_id=room_id,
+            body=text,
+            event_id=getattr(resp, "event_id", "") or "",
+        )
 
     # -- Built-in commands & menu -----------------------------------------
 
@@ -760,7 +858,13 @@ class CommandBot:
         except Exception as exc:
             logger.warning("menu send failed room=%s: %s", room_id, exc)
             return None
-        return getattr(resp, "event_id", None)
+        event_id = getattr(resp, "event_id", None)
+        self._mirror_out(
+            room_id=room_id,
+            body=menu.get("text", "") or "",
+            event_id=event_id or "",
+        )
+        return event_id
 
     async def _edit_menu(
         self,

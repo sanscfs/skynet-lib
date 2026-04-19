@@ -18,6 +18,7 @@ members = [
     "skynet-matrix",
     "skynet-mcp",
     "skynet-postgres",
+    "skynet-providers",
     "skynet-qdrant",
     "skynet-retrieval",
     "skynet-scoring",
@@ -1738,11 +1739,12 @@ dev = [
 
 [[package]]
 name = "skynet-matrix"
-version = "2026.4.19.2"
+version = "2026.4.19.3"
 source = { editable = "packages/skynet-matrix" }
 dependencies = [
     { name = "httpx" },
     { name = "matrix-nio" },
+    { name = "redis" },
     { name = "skynet-core" },
 ]
 
@@ -1750,6 +1752,7 @@ dependencies = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "matrix-nio", specifier = ">=0.24,<1.0" },
+    { name = "redis", specifier = ">=5.0" },
     { name = "skynet-core", editable = "packages/skynet-core" },
 ]
 
@@ -1798,6 +1801,21 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "skynet-providers"
+version = "2026.4.19"
+source = { editable = "packages/skynet-providers" }
+dependencies = [
+    { name = "httpx" },
+    { name = "skynet-vault" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "skynet-vault", editable = "packages/skynet-vault" },
+]
 
 [[package]]
 name = "skynet-qdrant"
