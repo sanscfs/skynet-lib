@@ -15,7 +15,7 @@ logger = logging.getLogger("skynet_providers.resolver")
 # (url substring, vault KV path, secret key name)
 # Ordered: more specific hosts first.
 _PROVIDER_REGISTRY: tuple[tuple[str, str, str], ...] = (
-    ("api.mistral.ai", "mistral/api-key", "api_key"),
+    ("api.mistral.ai", "mistral", "api_key"),
     ("openrouter.ai", "openrouter", "api_key"),
     ("skynet-cache", "openrouter", "api_key"),
 )
