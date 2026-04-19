@@ -12,6 +12,8 @@ from typing import Any
 
 import httpx
 
+from skynet_matrix.wrap import build_edit_payload, build_footer_payload
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 15.0
@@ -97,6 +99,52 @@ class AsyncMatrixClient:
             logger.warning("Matrix async send_text failed: %s", e)
         return None
 
+    async def send_with_footer(
+        self,
+        room_id: str,
+        body: str,
+        *,
+        trace_id: str = "",
+        duration_s: float = 0,
+        duration_ms: int = 0,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        steps: list[dict] | None = None,
+        rag_sources: list[str] | None = None,
+        tools_used: list[str] | None = None,
+        cost_usd: float = 0,
+        service: str = "",
+        formatted_body: str | None = None,
+        reply_to: str | None = None,
+        thread_root: str | None = None,
+        extra_content: dict | None = None,
+        trace_meta_extra: dict | None = None,
+    ) -> str | None:
+        """Async mirror of :meth:`MatrixClient.send_with_footer`."""
+        combined_body, extra = build_footer_payload(
+            body,
+            trace_id=trace_id,
+            duration_s=duration_s,
+            duration_ms=duration_ms,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            steps=steps,
+            rag_sources=rag_sources,
+            tools_used=tools_used,
+            cost_usd=cost_usd,
+            service=service,
+            formatted_body=formatted_body,
+            extra_content=extra_content,
+            trace_meta_extra=trace_meta_extra,
+        )
+        return await self.send_text(
+            room_id,
+            combined_body,
+            reply_to=reply_to,
+            thread_root=thread_root,
+            extra_content=extra,
+        )
+
     async def send_in_thread(
         self,
         room_id: str,
@@ -161,6 +209,85 @@ class AsyncMatrixClient:
                 return resp.json().get("event_id")
         except Exception as e:
             logger.warning("Matrix async edit failed: %s", e)
+        return None
+
+    async def edit_with_footer(
+        self,
+        room_id: str,
+        event_id: str,
+        new_body: str,
+        *,
+        trace_id: str = "",
+        duration_s: float = 0,
+        duration_ms: int = 0,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        steps: list[dict] | None = None,
+        rag_sources: list[str] | None = None,
+        tools_used: list[str] | None = None,
+        cost_usd: float = 0,
+        service: str = "",
+        formatted_body: str | None = None,
+        thread_root: str | None = None,
+        trace_meta_extra: dict | None = None,
+    ) -> str | None:
+        """Async mirror of :meth:`MatrixClient.edit_with_footer`."""
+        combined_body, combined_formatted, trace_meta = build_edit_payload(
+            new_body,
+            trace_id=trace_id,
+            duration_s=duration_s,
+            duration_ms=duration_ms,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            steps=steps,
+            rag_sources=rag_sources,
+            tools_used=tools_used,
+            cost_usd=cost_usd,
+            service=service,
+            formatted_body=formatted_body,
+            trace_meta_extra=trace_meta_extra,
+        )
+
+        txn = self._next_txn()
+        url = f"/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn}"
+        new_content: dict[str, Any] = {
+            "msgtype": "m.text",
+            "body": combined_body,
+        }
+        if combined_formatted is not None:
+            new_content["format"] = "org.matrix.custom.html"
+            new_content["formatted_body"] = combined_formatted
+        if thread_root:
+            new_content["m.relates_to"] = {
+                "rel_type": "m.thread",
+                "event_id": thread_root,
+                "is_falling_back": True,
+                "m.in_reply_to": {"event_id": thread_root},
+            }
+
+        content: dict[str, Any] = {
+            "msgtype": "m.text",
+            "body": f"* {combined_body}",
+            "m.new_content": new_content,
+            "m.relates_to": {
+                "rel_type": "m.replace",
+                "event_id": event_id,
+            },
+        }
+        if combined_formatted is not None:
+            content["format"] = "org.matrix.custom.html"
+            content["formatted_body"] = f"* {combined_formatted}"
+        if trace_meta is not None:
+            content["dev.skynet.trace"] = trace_meta
+
+        try:
+            client = await self._get_client()
+            resp = await client.put(url, json=content)
+            if resp.is_success:
+                return resp.json().get("event_id")
+            logger.warning("Matrix async edit_with_footer %s -> %s", resp.status_code, resp.text[:200])
+        except Exception as e:
+            logger.warning("Matrix async edit_with_footer failed: %s", e)
         return None
 
     async def edit_in_thread(

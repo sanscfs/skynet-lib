@@ -45,6 +45,7 @@ def format_trace_footer(
     rag_sources: list[str] | None = None,
     tools_used: list[str] | None = None,
     cost_usd: float = 0,
+    service: str = "",
 ) -> str:
     """Format a trace footer for a Matrix message.
 
@@ -59,6 +60,10 @@ def format_trace_footer(
         rag_sources: List of RAG source paths (shows filenames, max 3).
         tools_used: List of tool names used (max 3).
         cost_usd: Estimated cost in USD.
+        service: Service/DAG identifier (e.g. ``"dag:active_memory"`` or
+            ``"skynet-agent"``). Renders as a trailing tag; useful for
+            Airflow DAG runs that have no OTel trace id but still want
+            source attribution in the footer.
 
     Returns:
         HTML string ``\\n\\n<small>... | ...</small>`` ready to append to a
@@ -91,6 +96,9 @@ def format_trace_footer(
 
     if cost_usd > 0:
         parts.append(f"\U0001f4b0${cost_usd:.3f}")
+
+    if service:
+        parts.append(f"\U0001f6e0\ufe0f{service}")
 
     if not parts:
         return ""
