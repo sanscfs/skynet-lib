@@ -17,7 +17,6 @@ from skynet_vibe.affinity import SOURCE_TRUST, cosine, time_decay
 from skynet_vibe.prototypes import DomainPrototype
 from skynet_vibe.signals import VibeSignal
 
-
 LLMClient = Callable[[str], Awaitable[str] | str]
 
 

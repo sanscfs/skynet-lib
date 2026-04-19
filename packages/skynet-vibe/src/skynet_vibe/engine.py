@@ -21,9 +21,9 @@ from typing import Any, Awaitable, Callable
 
 from skynet_vibe.affinity import cosine, signal_weight
 from skynet_vibe.emoji import embed_emoji, phrase_for
+from skynet_vibe.exceptions import EmbeddingError, PrototypeNotFoundError
 from skynet_vibe.explain import describe_current_vibe as _describe_current_vibe
 from skynet_vibe.explain import explain_signal as _explain_signal
-from skynet_vibe.exceptions import EmbeddingError, PrototypeNotFoundError
 from skynet_vibe.prototypes import PrototypeRegistry
 from skynet_vibe.signals import FacetVectors, Source, VibeSignal
 from skynet_vibe.store import VibeStore

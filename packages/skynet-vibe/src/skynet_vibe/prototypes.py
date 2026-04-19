@@ -203,6 +203,7 @@ class PrototypeRegistry:
         """Load already-computed centroids (skip embedding). Useful for tests
         and for reloading from a persisted cache."""
         for name, payload in data.items():
-            self._prototypes[name] = DomainPrototype.from_dict(payload if "name" in payload else {**payload, "name": name})
+            full_payload = payload if "name" in payload else {**payload, "name": name}
+            self._prototypes[name] = DomainPrototype.from_dict(full_payload)
 
 
