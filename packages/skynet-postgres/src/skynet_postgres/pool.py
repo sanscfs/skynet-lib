@@ -19,11 +19,12 @@ rebuild.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Union
 
 import asyncpg
 
@@ -45,7 +46,27 @@ _AUTH_ERRORS: tuple[type[BaseException], ...] = (
 )
 
 
-CredsProvider = Callable[[], tuple[str, str]]
+# Credentials providers come in two shapes:
+#
+# * Sync -- ``Callable[[], Tuple[str, str]]``. Most callers pass a plain
+#   function that pokes Vault via ``hvac`` and returns ``(user, pw)``.
+#   That call is a blocking HTTP request (typically 50-200ms), so we
+#   dispatch it via ``asyncio.to_thread`` to avoid freezing the event
+#   loop while rotation is in-flight.
+#
+# * Async -- ``Callable[[], Awaitable[Tuple[str, str]]]``. Callers with
+#   an async Vault client pass a coroutine function; we await it
+#   directly.
+#
+# Detection uses ``inspect.iscoroutinefunction`` at call time; this
+# supports ``functools.partial``/bound methods where the wrapped
+# callable is async as long as Python sees the wrapper as a coroutine
+# function. For the (rare) corner case where a sync wrapper returns a
+# coroutine, we fall back to ``inspect.isawaitable`` on the result.
+CredsProvider = Union[
+    Callable[[], tuple[str, str]],
+    Callable[[], Awaitable[tuple[str, str]]],
+]
 
 
 @dataclass(frozen=True)
@@ -129,12 +150,32 @@ class AsyncPool:
 
     # -- internals -------------------------------------------------------
 
+    async def _resolve_creds(self) -> tuple[str, str]:
+        """Invoke ``self._creds_provider`` without blocking the loop.
+
+        * If the provider is a coroutine function, await it directly.
+        * Otherwise call it in a worker thread via ``asyncio.to_thread``
+          so the (usually blocking) Vault HTTP request doesn't freeze
+          the event loop.
+        * As a final fallback, if a sync provider happens to return a
+          coroutine/awaitable (e.g. ``functools.partial`` wrapping an
+          async function, which ``iscoroutinefunction`` misses), await
+          the awaitable we got back.
+        """
+        provider = self._creds_provider
+        if inspect.iscoroutinefunction(provider):
+            return await provider()  # type: ignore[misc]
+        result = await asyncio.to_thread(provider)  # type: ignore[arg-type]
+        if inspect.isawaitable(result):
+            return await result  # type: ignore[return-value]
+        return result  # type: ignore[return-value]
+
     async def _build_pool_locked(self) -> None:
         """Build a fresh asyncpg pool from current credentials.
 
         Caller MUST hold ``self._lock``.
         """
-        username, password = self._creds_provider()
+        username, password = await self._resolve_creds()
         logger.info(
             "creating asyncpg pool user=%s host=%s:%s db=%s",
             username,
@@ -162,6 +203,14 @@ class AsyncPool:
         already rotated in between (generation moved forward), this call
         is a no-op -- one rotation is enough for a burst of concurrent
         auth errors.
+
+        The rotation is atomic from the perspective of other callers:
+        the stale pool stays referenced until the fresh one is built,
+        so a concurrent ``_require_pool()`` never sees ``self._pool ==
+        None`` mid-rebuild. (That matters because ``_resolve_creds``
+        yields to the loop while the blocking Vault fetch runs in a
+        worker thread -- without this ordering, racing callers would
+        raise ``PoolNotStartedError`` during rotation.)
         """
         async with self._lock:
             if self._closed:
@@ -170,21 +219,52 @@ class AsyncPool:
                 # Another task already rotated; nothing to do.
                 return
             old = self._pool
-            self._pool = None
+            # Fetch creds + build the new pool BEFORE nulling ``self._pool``
+            # so racing ``_require_pool`` calls keep seeing the stale one
+            # (they'll either succeed via an already-queued connection or
+            # fall through to their own auth-error path, which this
+            # ``_lock`` serializes and generation-checks).
+            try:
+                fresh = await self._build_fresh_pool_locked()
+            except Exception:
+                # Rotation failed -- leave the stale pool in place so
+                # the next call has something to talk to. Callers that
+                # caught the auth error will see a rotation failure
+                # bubble up as ``CredentialsRotationFailed``.
+                raise
+            self._pool = fresh
             if old is not None:
                 try:
                     await old.close()
                 except Exception:  # pragma: no cover -- best-effort close
                     logger.warning("error closing stale pool during rotation", exc_info=True)
-            try:
-                await self._build_pool_locked()
-            except Exception:
-                # Rotation failed -- leave ``self._pool`` None so the
-                # next call will attempt ``start()`` again instead of
-                # using a half-built pool.
-                raise
             self._generation += 1
             logger.info("pool rotated with fresh credentials (generation=%d)", self._generation)
+
+    async def _build_fresh_pool_locked(self) -> "asyncpg.Pool":
+        """Build a fresh asyncpg pool from current credentials and
+        return it WITHOUT touching ``self._pool``. Caller MUST hold
+        ``self._lock`` and is responsible for swapping the returned
+        pool into place."""
+        username, password = await self._resolve_creds()
+        logger.info(
+            "creating asyncpg pool user=%s host=%s:%s db=%s",
+            username,
+            self._config.host,
+            self._config.port,
+            self._config.database,
+        )
+        return await asyncpg.create_pool(
+            host=self._config.host,
+            port=self._config.port,
+            database=self._config.database,
+            user=username,
+            password=password,
+            min_size=self._config.min_size,
+            max_size=self._config.max_size,
+            command_timeout=self._config.command_timeout,
+            **self._config.extra,
+        )
 
     def _require_pool(self) -> asyncpg.Pool:
         if self._closed:

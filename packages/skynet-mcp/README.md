@@ -40,12 +40,31 @@ mount_mcp(app, registry)
   - 200 `{"result": ...}` on success
   - 400 on schema validation failure
   - 404 for unknown tools
-  - 500 `{"error": "..."}` on handler exception (no stack traces on the wire)
+  - `{status}` `{"error": "Upstream: {status}"}` when the handler raises
+    `httpx.HTTPStatusError` (or any exception carrying a
+    `.response.status_code` attribute, e.g. `requests.HTTPError`): the
+    upstream status is preserved on the wire so callers that special-case
+    502/503/404 from a downstream service keep working. httpx is a soft
+    dependency -- if httpx isn't installed the passthrough still works
+    via duck-typing.
+  - 500 `{"error": "ClassName: msg"}` on any other handler exception
+    (no stack traces on the wire)
 
 ## Optional OTel
 
 Install the `otel` extra. When `opentelemetry` is importable, every tool call
-is wrapped in a span named `mcp.tool.{name}`.
+is wrapped in a span whose name is `f"{span_prefix}{tool_name}"`. The default
+`span_prefix` is `"tool_"`, which matches the hand-rolled MCP scaffolding
+that Skynet services used before this library existed -- existing
+Grafana/Tempo dashboards keep matching without any change.
+
+New services that prefer the namespaced form can opt in via:
+
+```python
+mount_mcp(app, registry, span_prefix="mcp.tool.")
+```
+
+which emits spans like `mcp.tool.mark_watched`.
 
 ```
 pip install "skynet-mcp[otel]"

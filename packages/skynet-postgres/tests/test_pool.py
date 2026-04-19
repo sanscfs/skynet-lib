@@ -307,3 +307,109 @@ async def test_close_is_idempotent_and_blocks_reuse(fake_asyncpg):
         await pool.start()
     with pytest.raises(PoolClosedError):
         await pool.fetch("SELECT 1")
+
+
+# --- non-blocking creds_provider resolution --------------------------
+#
+# A sync creds_provider (the common case: hvac poke that does a
+# blocking HTTP call) must be dispatched to a worker thread so it
+# doesn't freeze the event loop. An async creds_provider (for callers
+# with an async Vault client) must be awaited directly. Both paths are
+# exercised here.
+
+
+async def test_sync_creds_provider_runs_on_thread_without_blocking_loop(
+    fake_asyncpg,
+):
+    """While a sync creds_provider is 'blocking' in a worker thread, other
+    coroutines on the loop MUST be allowed to make progress. We prove
+    concurrency by sleeping inside the provider and flipping a flag in
+    a concurrent coroutine -- if the provider blocked the loop, the
+    flag would only flip after the provider returned."""
+    import time
+
+    concurrent_ran = {"flag": False}
+    # Timestamps recorded from both worlds so the test can assert the
+    # concurrent coroutine finished BEFORE the blocking provider did.
+    concurrent_finished_at: list[float] = []
+
+    async def flip_flag_after_yield() -> None:
+        # Yield control to the loop, then set the flag. If the loop is
+        # blocked by the sync creds_provider this coroutine can't run
+        # until after the provider returns.
+        await asyncio.sleep(0)
+        concurrent_ran["flag"] = True
+        concurrent_finished_at.append(time.monotonic())
+
+    provider_finished_at: list[float] = []
+
+    def sync_slow_provider() -> tuple[str, str]:
+        # This is blocking on purpose -- the whole point is to prove we
+        # don't freeze the event loop when the provider is slow.
+        time.sleep(0.05)
+        provider_finished_at.append(time.monotonic())
+        return ("u", "p")
+
+    pool = AsyncPool(config=_config(), creds_provider=sync_slow_provider)
+
+    # Schedule a concurrent task FIRST so we can observe whether the
+    # loop keeps ticking while the provider is 'busy'.
+    concurrent = asyncio.create_task(flip_flag_after_yield())
+
+    await pool.start()
+
+    # The concurrent task must have completed at least once while the
+    # provider was blocking in its thread.
+    await concurrent
+    assert concurrent_ran["flag"] is True
+
+    # The concurrent flag MUST have flipped BEFORE the blocking
+    # provider finished -- that's the load-bearing proof the loop
+    # wasn't frozen while the thread slept.
+    assert concurrent_finished_at, "concurrent coroutine did not record a timestamp"
+    assert provider_finished_at, "provider did not record a timestamp"
+    assert concurrent_finished_at[0] < provider_finished_at[0]
+
+    assert fake_asyncpg.created_pools[0].creds == ("u", "p")
+    await pool.close()
+
+
+async def test_async_creds_provider_is_awaited_directly(fake_asyncpg):
+    """An ``async def`` creds_provider skips ``asyncio.to_thread`` and
+    is awaited directly -- same return shape, same pool result."""
+    calls: list[None] = []
+
+    async def async_provider() -> tuple[str, str]:
+        # Give the loop a chance to run other work so this is
+        # genuinely exercising the async path.
+        await asyncio.sleep(0)
+        calls.append(None)
+        return ("async_user", "async_pw")
+
+    pool = AsyncPool(config=_config(), creds_provider=async_provider)
+    await pool.start()
+
+    assert len(calls) == 1
+    assert fake_asyncpg.created_pools[0].creds == ("async_user", "async_pw")
+
+    await pool.close()
+
+
+async def test_async_creds_provider_rotates_correctly_on_auth_error(fake_asyncpg):
+    """Rotation path must work with an async creds_provider too -- fresh
+    creds are fetched from the async provider and the pool rebuilds."""
+    fake_asyncpg.scripts = [_auth_error(), [{"ok": True}]]
+    pairs = iter([("u1", "p1"), ("u2", "p2")])
+
+    async def async_provider() -> tuple[str, str]:
+        return next(pairs)
+
+    pool = AsyncPool(config=_config(), creds_provider=async_provider)
+    await pool.start()
+
+    rows = await pool.fetch("SELECT 1")
+    assert rows == [{"ok": True}]
+    assert len(fake_asyncpg.created_pools) == 2
+    assert fake_asyncpg.created_pools[1].creds == ("u2", "p2")
+
+    await pool.close()

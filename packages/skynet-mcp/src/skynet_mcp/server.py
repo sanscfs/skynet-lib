@@ -39,13 +39,27 @@ except ImportError:  # pragma: no cover
     _TRACER = None  # type: ignore[assignment]
 
 
+# ---------------------------------------------------------------------------
+# Optional httpx integration -- used to passthrough upstream HTTP status codes
+# when a tool handler calls an HTTP API and the upstream returns a non-2xx.
+# httpx is a soft dep so the module still imports if httpx is missing.
+# ---------------------------------------------------------------------------
+
+try:  # pragma: no cover - import guard
+    import httpx as _httpx
+
+    _HTTPX_STATUS_ERROR: type[BaseException] | None = _httpx.HTTPStatusError
+except ImportError:  # pragma: no cover
+    _HTTPX_STATUS_ERROR = None
+
+
 @contextlib.contextmanager
-def _tool_span(name: str) -> Iterator[None]:
-    """Open an OTel span named ``mcp.tool.{name}`` if OTel is available."""
+def _tool_span(name: str, span_prefix: str) -> Iterator[None]:
+    """Open an OTel span named ``{span_prefix}{name}`` if OTel is available."""
     if _TRACER is None:
         yield
         return
-    with _TRACER.start_as_current_span(f"mcp.tool.{name}"):
+    with _TRACER.start_as_current_span(f"{span_prefix}{name}"):
         yield
 
 
@@ -72,11 +86,16 @@ async def _invoke(spec: ToolSpec, arguments: dict[str, Any]) -> Any:
     return result
 
 
-def build_router(registry: ToolRegistry) -> APIRouter:
+def build_router(registry: ToolRegistry, span_prefix: str = "tool_") -> APIRouter:
     """Return a FastAPI router exposing the MCP endpoints for ``registry``.
 
     Prefer :func:`mount_mcp` which wires this router into an existing
     ``FastAPI`` application and is what services usually want.
+
+    ``span_prefix`` controls the OTel span name when a tool is invoked --
+    the span becomes ``f"{span_prefix}{tool_name}"``. Defaults to
+    ``"tool_"`` for backwards compatibility with hand-rolled MCP
+    scaffolding whose dashboards query by ``tool_{name}``.
     """
     router = APIRouter(tags=["mcp"])
 
@@ -127,9 +146,26 @@ def build_router(registry: ToolRegistry) -> APIRouter:
         )
 
         try:
-            with _tool_span(tool_name):
+            with _tool_span(tool_name, span_prefix):
                 result = await _invoke(spec, arguments)
         except Exception as exc:
+            # Preserve upstream HTTP status codes if the handler raised
+            # an ``httpx.HTTPStatusError`` -- callers that special-case
+            # specific upstream failures (e.g. 502 from a downstream MCP)
+            # rely on this passthrough rather than seeing every error
+            # collapsed to 500. Fall back to the generic 500 wrap for
+            # everything else.
+            upstream_status = _upstream_status_code(exc)
+            if upstream_status is not None:
+                logger.warning(
+                    "mcp.tool.upstream_error name=%s status=%d",
+                    tool_name,
+                    upstream_status,
+                )
+                return JSONResponse(
+                    status_code=upstream_status,
+                    content={"error": f"Upstream: {upstream_status}"},
+                )
             # Log with traceback server-side; wire body carries only the
             # exception class name + message -- never the stack trace.
             logger.exception("mcp.tool.error name=%s", tool_name)
@@ -143,21 +179,51 @@ def build_router(registry: ToolRegistry) -> APIRouter:
     return router
 
 
+def _upstream_status_code(exc: BaseException) -> int | None:
+    """Return the upstream HTTP status if ``exc`` looks like an HTTP error.
+
+    Handles ``httpx.HTTPStatusError`` when httpx is installed, and also
+    accepts any exception carrying a ``.response.status_code`` attribute
+    (same shape is used by ``requests.HTTPError`` and by our own
+    ``skynet_core`` client wrappers). Returns ``None`` if the exception
+    is not an HTTP-status error.
+    """
+    if _HTTPX_STATUS_ERROR is not None and isinstance(exc, _HTTPX_STATUS_ERROR):
+        return int(exc.response.status_code)
+    # Duck-type: anything with a .response.status_code (and no httpx
+    # dependency) still gets the passthrough. Guard against surprise
+    # attribute access on unrelated exceptions.
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if isinstance(status, int) and 100 <= status < 600:
+        return status
+    return None
+
+
 def mount_mcp(
     app: FastAPI,
     registry: ToolRegistry,
     prefix: str = "",
+    *,
+    span_prefix: str = "tool_",
 ) -> None:
     """Attach the MCP endpoints to ``app``.
 
     ``prefix`` is passed straight through to ``app.include_router`` -- use
     ``""`` to mount at ``/tools`` (the default MCP convention) or
     ``"/mcp"`` to namespace under ``/mcp/tools``.
+
+    ``span_prefix`` configures the OTel span name when a tool fires: the
+    resulting span is ``f"{span_prefix}{tool_name}"``. Defaults to
+    ``"tool_"`` so existing Grafana/Tempo dashboards that were wired up
+    against the pre-library ``tool_{name}`` convention keep working.
+    Services that want the newer namespaced form can pass
+    ``span_prefix="mcp.tool."``.
     """
     # Normalize a trailing slash -- FastAPI forbids it on ``include_router``.
     if prefix == "/":
         prefix = ""
-    app.include_router(build_router(registry), prefix=prefix)
+    app.include_router(build_router(registry, span_prefix=span_prefix), prefix=prefix)
 
 
 __all__ = ["mount_mcp", "build_router"]

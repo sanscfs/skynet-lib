@@ -249,6 +249,97 @@ class CommandBot:
             if ok:
                 logger.info("advertised %d commands in %s", len(self._commands), room_id)
 
+    async def post_message(
+        self,
+        room_id: str,
+        text: str,
+        html: Optional[str] = None,
+        thread_root: Optional[str] = None,
+    ) -> Any:
+        """Post a plain or HTML message to a room outside the command path.
+
+        Use this for module-initiated posts that don't originate from a
+        ``!cmd`` dispatch -- scheduled jobs, webhook receivers, periodic
+        notifications, etc. For posting a reply from inside a command
+        handler, just ``return`` the text (or a ``{"text", "html"}``
+        dict) from the handler; the dispatcher calls the same underlying
+        code path.
+
+        Parameters
+        ----------
+        room_id:
+            Matrix room ID (``!...:homeserver``).
+        text:
+            Plain-text body. Always sent as ``body``.
+        html:
+            Optional HTML body. When provided, the event is sent with
+            ``format=org.matrix.custom.html`` + ``formatted_body=html``.
+            When omitted, a safe auto-formatted HTML body is generated
+            from ``text`` (HTML-escaped, newlines -> ``<br/>``) so
+            rendering is consistent across clients.
+        thread_root:
+            Optional event_id of the thread root. When set, the message
+            is sent as a threaded reply (``m.relates_to`` with
+            ``rel_type=m.thread``).
+
+        Returns the ``room_send`` response from the underlying client,
+        or ``None`` if the send failed (errors are logged, not raised,
+        so a misbehaving callsite never takes the bot down).
+        """
+        assert self._client is not None, "call _ensure_client() first"
+        content: dict[str, Any] = {
+            "msgtype": "m.text",
+            "body": text,
+            "format": "org.matrix.custom.html",
+            "formatted_body": (
+                html
+                if html is not None
+                else html_lib.escape(text).replace("\n", "<br/>")
+            ),
+        }
+        if thread_root:
+            content["m.relates_to"] = {
+                "rel_type": "m.thread",
+                "event_id": thread_root,
+            }
+        try:
+            return await self._client.room_send(
+                room_id=room_id,
+                message_type="m.room.message",
+                content=content,
+            )
+        except Exception as exc:
+            logger.warning("post_message failed room=%s: %s", room_id, exc)
+            return None
+
+    async def react(self, room_id: str, event_id: str, emoji: str) -> Any:
+        """Post an ``m.reaction`` to ``event_id`` in ``room_id``.
+
+        Useful for background acknowledgments from scheduled jobs or
+        webhook handlers that want to signal "I saw this" on a user's
+        message without posting a full reply.
+
+        Returns the ``room_send`` response, or ``None`` on failure
+        (errors are logged, not raised).
+        """
+        assert self._client is not None, "call _ensure_client() first"
+        content: dict[str, Any] = {
+            "m.relates_to": {
+                "rel_type": "m.annotation",
+                "event_id": event_id,
+                "key": emoji,
+            }
+        }
+        try:
+            return await self._client.room_send(
+                room_id=room_id,
+                message_type="m.reaction",
+                content=content,
+            )
+        except Exception as exc:
+            logger.warning("react failed room=%s event=%s: %s", room_id, event_id, exc)
+            return None
+
     # -- Dispatch (sync-loop entry points; also called directly by tests) --
 
     async def handle_text_event(self, room: Any, event: Any) -> None:

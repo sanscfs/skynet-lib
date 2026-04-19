@@ -1,6 +1,6 @@
 [project]
 name = "skynet-postgres"
-version = "2026.4.19"
+version = "2026.4.19.1"
 description = "Skynet Postgres -- asyncpg pool with Vault dynamic-credentials rotation"
 requires-python = ">=3.11"
 dependencies = [
