@@ -10,7 +10,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from skynet_matrix import (
     BotConfig,
     Command,
@@ -19,7 +18,6 @@ from skynet_matrix import (
     parse_command_line,
 )
 from skynet_matrix.state_events import STATE_EVENT_TYPE
-
 
 # -- Helpers -----------------------------------------------------------------
 
