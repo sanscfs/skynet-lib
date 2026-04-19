@@ -1,0 +1,18 @@
+[project]
+name = "skynet-postgres"
+version = "2026.4.19"
+description = "Skynet Postgres -- asyncpg pool with Vault dynamic-credentials rotation"
+requires-python = ">=3.11"
+dependencies = [
+    "asyncpg>=0.29,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
