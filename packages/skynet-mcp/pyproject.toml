@@ -1,0 +1,19 @@
+[project]
+name = "skynet-mcp"
+version = "2026.4.19"
+description = "Skynet MCP-over-HTTP server library: FastAPI tool registry + /tools endpoints"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.110",
+    "jsonschema>=4.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+otel = [
+    "opentelemetry-api>=1.28",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
