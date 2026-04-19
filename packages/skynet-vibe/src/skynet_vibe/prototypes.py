@@ -172,6 +172,24 @@ class PrototypeRegistry:
         for name, seeds in config.items():
             await self.add(name, list(seeds))
 
+    async def load_defaults(self) -> None:
+        """Load the packaged ``config/default_prototypes.yaml`` bundle.
+
+        Convenience wrapper so callers can bootstrap 11 common domains with
+        one line. Requires PyYAML (listed in the package dependencies).
+        """
+        from importlib import resources
+
+        import yaml  # type: ignore[import-not-found]
+
+        raw = resources.files("skynet_vibe").joinpath("config/default_prototypes.yaml").read_text(
+            encoding="utf-8"
+        )
+        data = yaml.safe_load(raw) or {}
+        if not isinstance(data, dict):
+            raise ValueError("default_prototypes.yaml must be a mapping of domain -> seed phrases")
+        await self.load_from_config({str(k): [str(x) for x in v] for k, v in data.items()})
+
     def remove(self, name: str) -> None:
         self._prototypes.pop(name, None)
 

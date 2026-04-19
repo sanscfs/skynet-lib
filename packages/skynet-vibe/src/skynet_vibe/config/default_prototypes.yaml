@@ -1,0 +1,65 @@
+# Default domain prototypes for skynet-vibe.
+#
+# Each top-level key is a domain name; the value is a list of seed phrases that
+# will be embedded and mean-centroided by PrototypeRegistry.load_from_config().
+# Sub-domains (e.g. slow-cinema, electronic-music) are peers of their parents --
+# there is no tree structure. Membership is pure cosine, so a single signal can
+# legitimately register strongly in both a parent domain and a narrower one.
+#
+# To add a new domain: append a new entry and reload the registry. No migration
+# of existing signals is required -- retagging is run-time geometry.
+
+music:
+  - "albums tracks artists listening melodies genres sound"
+  - "rhythm beat production mixing recording studio"
+  - "song composition instrumentation vocals harmony"
+
+movies:
+  - "film cinema director storytelling cinematography"
+  - "characters plot scenes dialogue pacing tension"
+  - "watching viewing screening feature-length narrative"
+
+books:
+  - "reading novels prose writing literary fiction"
+  - "authors chapters plot characters themes prose"
+  - "long-form reading reflection story imagination"
+
+food:
+  - "cooking eating flavor taste cuisine ingredients"
+  - "restaurant dish recipe meal dinner lunch"
+  - "texture aroma palate seasoning preparation"
+
+travel:
+  - "trips places destinations exploring cities landscapes"
+  - "journey itinerary visiting wandering new places"
+  - "airport hotel train scenic route foreign"
+
+photography:
+  - "images photos framing composition lighting aesthetic"
+  - "camera lens shot exposure color mood of image"
+  - "visual capture moment light shadow subject"
+
+slow-cinema:
+  - "long takes minimal dialogue contemplative pacing"
+  - "Tarkovsky Bresson Bergman Béla Tarr Haneke"
+  - "slow patient meditative still landscape wide shots"
+
+electronic-music:
+  - "synthesizers drum machines production textures beats"
+  - "techno house ambient IDM electronic atmosphere"
+  - "programmed rhythm synthetic sound design club"
+
+workout:
+  - "exercise running lifting cardio fitness physical"
+  - "training reps sets pace heart rate stamina"
+  - "gym movement body push energetic effort"
+
+work-focus:
+  - "deep focus concentration flow coding writing task"
+  - "minimal distraction quiet productive sustained attention"
+  - "desk ambient instrumental background study mode"
+
+evening-wind-down:
+  - "calm quiet relaxing slow evening night unwind"
+  - "soft low-key mellow introspective ease of day"
+  - "warm lamp tea bed reading candlelit"
