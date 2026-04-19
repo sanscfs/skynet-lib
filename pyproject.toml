@@ -23,6 +23,7 @@ skynet-consolidation = { workspace = true }
 skynet-vault = { workspace = true }
 skynet-postgres = { workspace = true }
 skynet-mcp = { workspace = true }
+skynet-vibe = { workspace = true }
 
 [dependency-groups]
 dev = [
