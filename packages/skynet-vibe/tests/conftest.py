@@ -1,0 +1,140 @@
+"""Shared fixtures and deterministic fakes for the skynet-vibe test suite.
+
+These fakes are intentionally trivial so the tests stay offline and fast.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from typing import Any
+
+import pytest
+
+
+def _hash_embed(text: str, dim: int = 16) -> list[float]:
+    """Stable synthetic embedding. NOT semantic -- only for offline tests.
+
+    Uses SHA-256 bytes so identical texts produce identical vectors and
+    different texts produce unrelated vectors, then L2-normalizes.
+    """
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    values = []
+    for i in range(dim):
+        b = digest[i % len(digest)]
+        values.append((b / 255.0) - 0.5)
+    # L2 normalize
+    norm = sum(x * x for x in values) ** 0.5
+    if norm == 0:
+        return values
+    return [x / norm for x in values]
+
+
+@pytest.fixture
+def hash_embedder():
+    """Sync hash-based embedder for tests."""
+
+    def _embed(text: str) -> list[float]:
+        return _hash_embed(text)
+
+    return _embed
+
+
+@pytest.fixture
+def async_hash_embedder():
+    """Async hash-based embedder for tests."""
+
+    async def _embed(text: str) -> list[float]:
+        return _hash_embed(text)
+
+    return _embed
+
+
+class FakeQdrant:
+    """In-memory Qdrant stub matching the subset VibeStore uses."""
+
+    def __init__(self) -> None:
+        self.collections: dict[str, dict[Any, dict]] = {}
+
+    def _coll(self, name: str) -> dict[Any, dict]:
+        return self.collections.setdefault(name, {})
+
+    async def upsert(self, collection: str, points: list[dict]) -> dict:
+        coll = self._coll(collection)
+        for p in points:
+            coll[p["id"]] = {
+                "id": p["id"],
+                "vector": list(p["vector"]),
+                "payload": dict(p.get("payload", {})),
+            }
+        return {"status": "ok"}
+
+    async def get_point(self, collection: str, point_id, *, with_vector: bool = False) -> dict | None:
+        coll = self._coll(collection)
+        p = coll.get(point_id)
+        if not p:
+            return None
+        out = {"id": p["id"], "payload": dict(p["payload"])}
+        if with_vector:
+            out["vector"] = list(p["vector"])
+        return out
+
+    async def search(
+        self,
+        collection: str,
+        vector: list[float],
+        limit: int = 5,
+        *,
+        filter: dict | None = None,
+        with_payload: bool = True,
+        score_threshold: float | None = None,
+    ) -> list[dict]:
+        from skynet_vibe.affinity import cosine
+
+        coll = self._coll(collection)
+        matches = []
+        for p in coll.values():
+            if filter and "must" in filter:
+                match = True
+                for clause in filter["must"]:
+                    key = clause.get("key")
+                    expected = clause.get("match", {}).get("value")
+                    actual = p["payload"].get(key)
+                    if actual != expected:
+                        match = False
+                        break
+                if not match:
+                    continue
+            score = cosine(vector, p["vector"])
+            if score_threshold is not None and score < score_threshold:
+                continue
+            point = {"id": p["id"], "score": score, "vector": list(p["vector"])}
+            if with_payload:
+                point["payload"] = dict(p["payload"])
+            matches.append(point)
+        matches.sort(key=lambda pt: pt["score"], reverse=True)
+        return matches[:limit]
+
+    async def set_payload(self, collection: str, point_ids: list, payload: dict) -> dict:
+        coll = self._coll(collection)
+        for pid in point_ids:
+            if pid in coll:
+                coll[pid]["payload"].update(payload)
+        return {"status": "ok"}
+
+
+@pytest.fixture
+def fake_qdrant():
+    return FakeQdrant()
+
+
+@pytest.fixture
+def fake_llm():
+    """Returns an async LLM callable that mimics a structured rerank response."""
+
+    async def _llm(prompt: str) -> str:
+        if "Respond with JSON" in prompt:
+            return '{"choice": 0, "reason": "top score aligns with current vibe"}'
+        # For describe_current_vibe
+        return "Leaning mellow and contemplative with strong recent signals."
+
+    return _llm

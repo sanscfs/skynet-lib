@@ -1,0 +1,205 @@
+# Default domain prototypes for skynet-vibe.
+#
+# Generated via openrouter_mistral_large from calibrated per-bucket chat corpus sample
+# (see docs/prototypes_derivation.md for sampling strategy + model details).
+#
+# Each top-level key is a domain; the value is a list of seed phrases
+# embedded and mean-centroided by PrototypeRegistry.load_from_config().
+
+# Designing, testing, and optimizing distributed AI systems, memory architectures, and high-performance computing infrastructure
+ai-infrastructure-optimization:
+  - "Qdrant writes (profile_raw, traits, chat_history), ~300ms кожен"
+  - "Skynet-agent крутиться на K3s з local-path storage"
+  - "VictoriaMetrics, Grafana, Tempo tracing"
+  - "parallel loading for RAG context"
+  - "CLASSIFY_EDGES_ENABLED=true. Detect cliques результат: Modularity Q = 0.910"
+  - "NVIDIA RTX 5090 (32GB GDDR7) consumes up to 575W"
+  - "vLLM (2026 version) supports FP8 and INT4 quantization"
+
+# Exploring thought processes, intuition, decision-making, and meta-cognitive frameworks for personal optimization
+personal-cognitive-architecture:
+  - "метаінтуїція: ти довіряєш відчуттю, яке підказує, який саме інструмент мислення зараз потрібен"
+  - "я люблю парадокси і живу в них. я люблю всеохопно дивитись одночасно під багатьма кутами"
+  - "дістаю визначення з підсвідомості- з власної векторної бази"
+  - "чи буває так, що інсайти суперечать логіці, і як ти тоді обираєш?"
+  - "подумать — у тебе це найбільший споживач енергії"
+  - "я відчуваю що повинен продовжувати робити що робив, бо мене туди тягне"
+
+# Exploring decentralized, non-hierarchical systems in technology, society, and cognitive frameworks
+horizontal-networks-philosophy:
+  - "вертикаль саме погана- це придушення резонансу інших заради одного"
+  - "горизонталь і індивідуальність. Побудова індивідуальності і відмова від вертикалі"
+  - "агенти взаємодіють не через команди 'зроби це', а через здатність 'налаштуватися' на спільний контекст"
+  - "хвильове кодування як універсальна база для горизонтальної мережі"
+  - "царство божого- сітки рівних взаємовідносин, бо це універсальна мова і бажання людства"
+
+# Building external memory systems and exploring personal identity construction through knowledge graphs
+personal-memory-identity-systems:
+  - "вся пам'ять в маркдаун, але робота з нею через вектори в qdrant"
+  - "інтуїтивний semantic search і при потребі full text search"
+  - "хочу повертатись в будь який момент будь коли"
+  - "memory.sanscfs.dev - не вантажиться граф і charts & analytics"
+  - "спільні ритми, які не належать мені, вони просто є"
+
+# Managing and automating self-hosted Kubernetes, networking, security, and high-availability systems
+self-hosted-infrastructure-management:
+  - "провалідуй де які хардкоди. бачу вони були з доменами і айпі"
+  - "я хочу щоб скрізь був 2fa на всіх інгресах"
+  - "sudo tailscale up --accept-dns --login-server=https://sanscfs.dev"
+  - "Migrate Airflow to Helm chart with KubernetesExecutor"
+  - "Configure ArgoCD GitHub webhooks for instant sync"
+  - "Istio convergence time reached 25 seconds for 95% proxy updates"
+  - "Headscale/K8s integration best practice: Use Persistent Volumes for SQLite"
+
+# Building and refining self-improving, multi-model AI agents with memory, task automation, and personalization
+autonomous-ai-agent-development:
+  - "я хочу щоб воно зараз провело ревю автоматизацієб (через еірфло)"
+  - "скайнет це багато моделей навколо однієї пам'яті і звичок"
+  - "запускай таски багатопоточно"
+  - "SRE Alert Agent — окремий агент що полює на алерти з Victoria Metrics"
+  - "той хто помирає має додать нову задачу, якщо нічого не може придумать"
+  - "він туди збирає технічні інфо, і не повязує графами мої звички"
+  - "я хочу щоб система вивчала мене і підлаштовувалась під мене"
+
+# Creating a structured, queryable knowledge base of personal habits, preferences, and behavioral patterns
+personal-identity-knowledge-graph:
+  - "що зараз воно назбирало про мене? там в профайлі якась діч"
+  - "у мене не працює ні меморі, ні профайл, ні ідентіті"
+  - "що він уже постив, хочу бачить історію"
+  - "чи записується в профайл те що я зараз тобі пишу?"
+  - "memory.sanscfs.dev - 0 памяті по моїй персоні"
+  - "досліди і запропонуй варіанти. він туди збирає технічні інфо"
+
+# Exploring brain states, consciousness models, and advanced neuroimaging techniques
+neuroscience-consciousness-research:
+  - "OPM-MEG physics: measuring weak magnetic fields created by neural electrical activity"
+  - "Global Workspace Theory (GWT) posits consciousness as global information broadcast"
+  - "Beamforming algorithms to mathematically 'remove' the skull from neural data"
+  - "Visual Snow linked to hyperexcitability of visual cortex neurons"
+  - "Neural engineering: Glial scarring encapsulates electrodes in 1-2 years"
+  - "OpenBCI Cyton + Daisy insufficient for gamma wave detection (125Hz limit)"
+  - "conscious dreaming technique views challenges as fractal patterns"
+
+# Managing and optimizing indoor grow spaces with climate control, nutrient systems, and automation
+indoor-gardening-automation:
+  - "Planning climate control for 7.5m² balcony grow space"
+  - "PPM conversion formula: PPM / 500 = mS/cm"
+  - "Ventilation system: carbon filter + long-form inline fan"
+  - "Substrate is inert coco coir, buffered with Calmag"
+  - "Decided to move inline fan outside tent for 20-30cm vertical gain"
+  - "Developing glutamate-based nut seasoning (15-25g/kg ratio)"
+  - "Aqua Balance (RO water) + distilled water base for nutrients"
+
+# Exploration of philosophical frameworks, metaphysical concepts, and consciousness theories
+philosophy-metaphysics-consciousness:
+  - "Lurianic Kabbalah: Ein Sof, Tzimtzum, Shevirat HaKelim"
+  - "Hegel's 'Science of Logic': Pure Being and Nothing as identical abstractions"
+  - "User's model: consciousness as thermodynamic factor where attention=energy"
+  - "kat' anthropon vs kat' aletheian: human cognition limits vs independent truth"
+  - "Hegelian Monism: Absolute as closed system where borders define totality"
+  - "Comparative analysis of 18th/19th-century German Idealism"
+  - "Absolute as 'pulsing concept of difference, repetition, and excess'"
+
+# Deep engagement with abstract mathematical concepts, theoretical physics, and prime number theory
+advanced-mathematical-physics:
+  - "Riemann Hypothesis: Non-trivial zeros constrained to Re(s) = 1/2"
+  - "Prime numbers as 'quantum energy' at Riemann zero interference nodes"
+  - "Topological inversion: w = 1/z prevents magnetic flux rupture"
+  - "li(x) = ∫ 1/ln(x) dx approximates prime count up to x"
+  - "Landauer's Principle: information erasure alters system energy"
+  - "Black hole radial direction becomes temporal dimension"
+  - "Topological quantum computing uses anyon world-line braiding"
+
+# Practical and theoretical knowledge of plant cultivation, ethnobotany, and chemical processes
+botanical-cultivation-research:
+  - "Coco coir chemistry: High K+/Na+ affinity requires Calmag buffering"
+  - "Watering method: 'Ring' technique (5-7cm from stem) with 20-50ml syringe"
+  - "Nutrient regimen: 6L Aqua Balance + 4L Distilled + 10ml Calmag + 15ml Coco A/B"
+  - "Autoflower growth: Topping causes 1-week delay in fixed flowering"
+  - "AQUAvalve mechanism closes at 20mm tray depth"
+  - "Harmala leaf preparation: Flower Mill for 'cotton' texture"
+  - "Secret Jardin Monkey Fan series for ventilation"
+
+# Optimization, maintenance, and evaluation of personal technology and hardware
+personal-tech-optimization:
+  - "Apple M4 Max 128GB provides 546 GB/s memory bandwidth"
+  - "TM2 battery life: 3-5 sessions per 18650 cell"
+  - "Sony WF-1000XM5 optimized for ANC, not mic clarity"
+  - "Onyx Boox Note Air 5C evaluation as primary E Ink device"
+  - "Zepp OS devices require re-pairing after factory reset"
+  - "iPhone hotspot forces macOS GPS geolocation update"
+  - "Recommended TM2 settings: 190°C (Level 6) for harmala leaves"
+
+# Practical knowledge of vaporization devices, herbal blends, and nootropic techniques
+herbal-vaporization-techniques:
+  - "Tinymight 2 (TM2) with titanium dosing capsules"
+  - "Blue light exposure degrades Lotus/Calea sedative effects"
+  - "TM2 'pre-dry' method: low temp (level 2-3) to vent moisture"
+  - "Long Xu Cha requires 2-3mm grind for convection"
+  - "Wormwood (Artemisia absinthium) vaporized at 180-190°C"
+  - "Damiana as 50% base improves vapor density and sweetness"
+  - "Blue Lotus preparation: remove calyxes, use only petals/stamens"
+
+# Focus on cryptographic systems, post-quantum security, and secure infrastructure management
+cybersecurity-post-quantum-cryptography:
+  - "Evaluating PQC readiness for personal crypto-assets"
+  - "RH proof impacts RSA security via prime distribution"
+  - "Post-quantum methods: Lattice-based (Kyber), Hash-based (SHA-256/3)"
+  - "Signal breach: Twilio allowed SMS interception, not E2E decryption"
+  - "YubiKey management via ykman CLI on macOS"
+  - "Local models (Qwen 2.5) for privacy-preserving log analysis"
+  - "Intent injection requires deterministic sandboxing"
+
+# Exploration of quantum fluctuations, inflationary physics, and cosmological phenomena
+quantum-cosmology-physics:
+  - "Quantum fluctuations stretched to galactic scales during inflation"
+  - "Reheating: inflaton decay into quark-gluon plasma at 10^27 K"
+  - "Static limit: velocity = c boundary in black hole ergosphere"
+  - "Planckian foam: 10^-35m vacuum energy fluctuations"
+  - "Light cones tilt toward black hole singularity"
+  - "Inflaton mass ≈ 10^13 GeV"
+  - "Penrose process: particle decay in ergosphere gains negative energy"
+
+# Technical setup, automation, and management of Linux-based AI/ML and DevOps infrastructure
+linux-devops-ai-systems:
+  - "Qwen3:32b running via Ollama (API endpoint: 11434)"
+  - "Qdrant container: podman run -d -p 6333:6333 -p 6334:6334"
+  - "Headscale config backup: db.sqlite + noise_private.key"
+  - "Vertex AI selected over Palantir for serverless Claude integration"
+  - "Arch Linux + Windows dual-boot on NVMe (nvme0n1)"
+  - "set -x in bash scripts for execution tracing"
+  - "OpenClaw as mobile SRE/DevOps assistant"
+
+# ---------------------------------------------------------------------------
+# Baseline domain prototypes for recommendation routing.
+#
+# These do NOT come from chat corpus — they are hand-seeded so domain-specific
+# bots (skynet-movies, skynet-music, future skynet-books) always have a base
+# prototype to filter against. The chat-derived prototypes above enrich the
+# vocabulary; these ensure the bots can always route.
+#
+# A signal about Tarkovsky registers at high cosine to BOTH
+# `existential-cinema-and-temporal-aesthetics` AND `movies` — this is the
+# intended overlap (multi-domain via cosine).
+# ---------------------------------------------------------------------------
+
+movies:
+  - "films cinema directors cinematography screenplay actors"
+  - "visual language editing pacing tone atmosphere"
+  - "arthouse horror noir drama documentary"
+  - "narrative structure shot composition mise en scène"
+  - "watched rewatched theatre streaming letterboxd"
+
+music:
+  - "albums tracks artists listening melodies genres"
+  - "rhythm beat production mixing recording bass drums"
+  - "live performance concert playlist playback discography"
+  - "ambient electronic jazz classical rock experimental"
+  - "listened saved rediscovered looped headphones"
+
+books:
+  - "books reading authors novels essays poetry"
+  - "fiction nonfiction philosophy theory memoir"
+  - "pages prose voice narrative style"
+  - "translated originally published annotated"
+  - "read finished abandoned rereading bookmarked"
