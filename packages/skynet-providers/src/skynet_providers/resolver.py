@@ -13,9 +13,12 @@ from functools import lru_cache
 logger = logging.getLogger("skynet_providers.resolver")
 
 # (url substring, vault KV path, secret key name)
-# Ordered: more specific hosts first.
+# Ordered: more specific hosts first. Mistral's KV field name uses a
+# dash ("api-key") while OpenRouter's uses an underscore ("api_key") —
+# preserve whatever the operator originally wrote when placing each
+# secret; don't try to rename either to force consistency.
 _PROVIDER_REGISTRY: tuple[tuple[str, str, str], ...] = (
-    ("api.mistral.ai", "mistral", "api_key"),
+    ("api.mistral.ai", "mistral", "api-key"),
     ("openrouter.ai", "openrouter", "api_key"),
     ("skynet-cache", "openrouter", "api_key"),
 )
