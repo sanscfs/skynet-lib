@@ -20,6 +20,9 @@ skynet-scoring = { workspace = true }
 skynet-graph = { workspace = true }
 skynet-retrieval = { workspace = true }
 skynet-consolidation = { workspace = true }
+skynet-vault = { workspace = true }
+skynet-postgres = { workspace = true }
+skynet-mcp = { workspace = true }
 
 [dependency-groups]
 dev = [
