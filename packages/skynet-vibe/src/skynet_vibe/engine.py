@@ -16,8 +16,9 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
+
+from skynet_scoring import compute_decay_factor_logical
 
 from skynet_vibe.affinity import cosine, signal_weight
 from skynet_vibe.emoji import embed_emoji, phrase_for
@@ -27,6 +28,32 @@ from skynet_vibe.explain import explain_signal as _explain_signal
 from skynet_vibe.prototypes import PrototypeRegistry
 from skynet_vibe.signals import FacetVectors, Source, VibeSignal
 from skynet_vibe.store import VibeStore
+
+
+def _decay_for(signal: VibeSignal, lambdas: dict[str, float] | None) -> float:
+    """Compute logical-time decay for a VibeSignal from its extra_payload.
+
+    Silence-safe by construction: reads ``missed_opportunities`` from
+    the payload (store round-trips the root-level field into
+    extra_payload), so a signal that never had a chance to be used
+    keeps a decay factor of 1.0 no matter how much wall-clock time
+    passes. See feedback_decay_logical_time for the rationale.
+    """
+    extra = signal.extra_payload or {}
+    payload_like = {
+        "missed_opportunities": int(extra.get("missed_opportunities", 0) or 0),
+        "memory_class": extra.get("memory_class", "episodic"),
+    }
+    if "salience" in extra and extra["salience"] is not None:
+        payload_like["salience"] = float(extra["salience"])
+    if "compression_level" in extra and extra["compression_level"] is not None:
+        payload_like["compression_level"] = int(extra["compression_level"])
+    return compute_decay_factor_logical(
+        payload_like,
+        memory_class=payload_like["memory_class"],
+        lambdas=lambdas,
+    )
+
 
 Embedder = Callable[[str], Awaitable[list[float]] | list[float]]
 LLMClient = Callable[[str], Awaitable[str] | str]
@@ -77,15 +104,18 @@ class VibeEngine:
         prototypes: PrototypeRegistry,
         embedder: Embedder,
         llm_client: LLMClient,
-        decay_half_life_days: float = 45.0,
         context_alpha: float = 0.5,
+        decay_lambdas: dict[str, float] | None = None,
     ):
         self.store = store
         self.prototypes = prototypes
         self.embedder = embedder
         self.llm = llm_client
-        self.decay_half_life_days = decay_half_life_days
         self.context_alpha = context_alpha
+        # Per-memory-class override for skynet_scoring logical decay
+        # lambdas. None -> DEFAULT_LAMBDAS from skynet_scoring (identity
+        # immortal, trait slow, episodic medium, raw fast).
+        self.decay_lambdas = decay_lambdas
 
     # ------------------------------------------------------------------
     # Absorb
@@ -165,7 +195,6 @@ class VibeEngine:
         If ``context_text`` is absent, the pool is seeded from the prototype
         centroid (if ``domain`` provided) or a zero-fallback is used.
         """
-        now = datetime.now(timezone.utc)
         prototype_centroid: list[float] | None = None
         if domain is not None:
             try:
@@ -189,12 +218,12 @@ class VibeEngine:
         weighted_sum = [0.0] * dim
         total_weight = 0.0
         for sig in raw_signals:
+            decay = _decay_for(sig, self.decay_lambdas)
             w = signal_weight(
                 sig,
                 prototype_centroid=prototype_centroid,
                 context_vector=context_vector,
-                now=now,
-                half_life_days=self.decay_half_life_days,
+                decay_factor=decay,
                 context_alpha=self.context_alpha,
             )
             if w <= 0 or len(sig.vectors.content) != dim:
@@ -261,6 +290,29 @@ class VibeEngine:
         top_signals_sorted = sorted(pool, key=lambda sw: sw[1], reverse=True)
         top_signals = [(s.id, round(w, 4)) for s, w in top_signals_sorted[:5]]
 
+        # Logical-time decay bookkeeping. The pool (typically ~128 raw
+        # signals that matched the seed cos > noise_floor) had a chance
+        # to steer the recommendation. The top 5 contributors actually
+        # shaped the target vector; treat everything BELOW them as a
+        # "missed opportunity" and bump its counter. This is what makes
+        # decay advance only when the system observes real traffic --
+        # silence freezes the clock, matching feedback_decay_logical_time.
+        top_ids = {s.id for s, _w in top_signals_sorted[:5]}
+        missed_records = [
+            {
+                "id": s.id,
+                "payload": {
+                    "missed_opportunities": int((s.extra_payload or {}).get("missed_opportunities", 0) or 0),
+                },
+            }
+            for s, _w in pool
+            if s.id not in top_ids
+        ]
+        try:
+            await self.store.bulk_increment_missed_opportunities(missed_records)
+        except Exception:
+            pass  # best-effort bookkeeping
+
         _ = chosen_score  # reserved for future diagnostic use
         return SuggestResult(
             candidate=chosen,
@@ -278,9 +330,10 @@ class VibeEngine:
 
         Uses the domain centroid as the seed query (if domain given) or scrolls
         a reasonable pool otherwise. Applies gradient weighting before handing
-        to the LLM.
+        to the LLM. ``window_days`` is passed through to the narrator as a
+        human-readable label only -- decay itself is logical-time
+        (missed_opportunities), not calendar-day.
         """
-        now = datetime.now(timezone.utc)
         prototype_centroid: list[float] | None = None
         if domain is not None:
             try:
@@ -294,15 +347,14 @@ class VibeEngine:
             return await _describe_current_vibe([], self.llm, domain=domain, window_days=window_days)
 
         raw_signals = await self._signal_pool(query_vector=prototype_centroid, top_k=128)
-        half_life = float(window_days) if window_days > 0 else self.decay_half_life_days
         scored: list[tuple[VibeSignal, float]] = []
         for sig in raw_signals:
+            decay = _decay_for(sig, self.decay_lambdas)
             w = signal_weight(
                 sig,
                 prototype_centroid=prototype_centroid,
                 context_vector=None,
-                now=now,
-                half_life_days=half_life,
+                decay_factor=decay,
                 context_alpha=self.context_alpha,
             )
             if w > 0:
@@ -326,12 +378,12 @@ class VibeEngine:
         context_vector: list[float] | None = None
         if context_text:
             context_vector = await _embed(self.embedder, context_text)
+        decay = _decay_for(signal, self.decay_lambdas)
         return _explain_signal(
             signal,
-            now=datetime.now(timezone.utc),
             prototype=prototype,
             context_vector=context_vector,
-            half_life_days=self.decay_half_life_days,
+            decay_factor=decay,
             context_alpha=self.context_alpha,
         )
 

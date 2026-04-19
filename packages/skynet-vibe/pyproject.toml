@@ -1,6 +1,6 @@
 [project]
 name = "skynet-vibe"
-version = "2026.4.19"
+version = "2026.4.20"
 description = "Universal vibe signal system: domain-as-prototype preference capture and retrieval"
 requires-python = ">=3.11"
 dependencies = [
@@ -9,6 +9,7 @@ dependencies = [
     "skynet-core>=2026.4.2",
     "skynet-embedding>=2026.4.2",
     "skynet-qdrant>=2026.4.9",
+    "skynet-scoring>=2026.4.2",
 ]
 
 [project.optional-dependencies]

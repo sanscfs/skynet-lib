@@ -21,7 +21,6 @@ def engine(fake_qdrant, async_hash_embedder, fake_llm):
         prototypes=prototypes,
         embedder=async_hash_embedder,
         llm_client=fake_llm,
-        decay_half_life_days=45.0,
     )
 
 
@@ -141,18 +140,22 @@ async def test_explain_signal_returns_breakdown(engine):
         "text_raw",
         "source_type",
         "source_trust",
-        "time_decay",
+        "decay_factor",
+        "missed_opportunities",
+        "memory_class",
         "prototype_cosine",
         "prototype_term",
         "context_cosine",
         "context_term",
         "final_weight",
-        "half_life_days",
         "context_alpha",
     ):
         assert key in breakdown, f"missing key {key!r}"
     assert breakdown["source_type"] == "chat"
     assert breakdown["source_trust"] == 1.0
+    # Fresh signal with 0 missed_opportunities -> full decay_factor.
+    assert breakdown["missed_opportunities"] == 0
+    assert breakdown["decay_factor"] == pytest.approx(1.0)
     # No LLM was needed
     assert isinstance(breakdown["final_weight"], float)
 

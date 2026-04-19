@@ -9,7 +9,7 @@ Public entry point: :class:`VibeEngine`.
 
 from __future__ import annotations
 
-from skynet_vibe.affinity import SOURCE_TRUST, cosine, signal_weight, time_decay
+from skynet_vibe.affinity import SOURCE_TRUST, cosine, signal_weight
 from skynet_vibe.emoji import EMOJI_TO_PHRASE, embed_emoji
 from skynet_vibe.engine import SuggestResult, VibeEngine
 from skynet_vibe.exceptions import (
@@ -33,7 +33,6 @@ __all__ = [
     "VibeEngine",
     "SuggestResult",
     "cosine",
-    "time_decay",
     "signal_weight",
     "SOURCE_TRUST",
     "EMOJI_TO_PHRASE",
@@ -46,4 +45,4 @@ __all__ = [
     "EmbeddingError",
 ]
 
-__version__ = "2026.4.19"
+__version__ = "2026.4.20"
