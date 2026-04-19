@@ -41,3 +41,8 @@ select = ["E", "F", "W", "I"]
 [tool.pytest.ini_options]
 testpaths = ["packages/*/tests"]
 asyncio_mode = "strict"
+# Use importlib importmode so that identically-named test modules
+# (e.g. test_engine.py in multiple packages) don't collide under a
+# workspace-wide pytest run. Combined with no ``tests/__init__.py``
+# markers this keeps each test file at a unique rootdir-relative path.
+addopts = "--import-mode=importlib"
