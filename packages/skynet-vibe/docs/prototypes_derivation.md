@@ -1,245 +1,248 @@
 # Prototype derivation notes
 
-**Generated**: 2026-04-19
-**Messages sampled**: 478
-**Source distribution**:
-- `skynet_chat`: 148
-- `claude_sessions`: 87
-- `google_takeout_gemini`: 243
+**Last regenerated**: 2026-04-19 (second pass, user-calibrated sampling)
+**LLM**: `mistralai/mistral-large-2512` via OpenRouter (external backend)
+**Entry point**: `scripts/extract_prototypes.py`
+**Wall-clock**: ~6 min (Qdrant scroll + 9 cluster chunks + 1 merge)
 
-**LLM**: `mistralai/mistral-large-2512` via OpenRouter
-**Chunks**: 8 (chunk size 60)
-**Raw proposals**: 55 (merged -> 14 final)
+## Sampling strategy
 
-## Final domains
+The chat corpus is **skewed**: a one-time historical dump
+(`google_takeout_gemini`, ~4k-5k messages) dwarfs the live streams
+(`skynet_chat` ~150, `claude_sessions` ~100). A single fixed sample (e.g. 1500
+uniform) drowns the user's live voice in the historical dump and produces
+prototypes that describe who the user was on Gemini a year ago, not who they
+are now in Skynet.
 
-### `self-quantification-and-biometric-systems`
+### Formula (`sample_per_bucket`)
 
-Technical and philosophical exploration of personal data collection, sleep tracking, biometric monitoring, and the infrastructure supporting self-quantification.
+```python
+LIVE_SOURCES  = {"skynet_chat", "claude_sessions", "matrix_dm", "matrix_chat"}
+LIVE_FULL_UNTIL = 500   # take the whole live bucket below this
+HISTORICAL_CAP  = 1000  # hard cap per historical bucket
 
-**Seed phrases:**
-- метрик сну немає взагалі, Gadgetbridge збирає лише заряд, біометричні дані не проходять
-- collect_gadgetbridge потребує фіксу для sleep метрик, пульс показує нормальну активність з спайком в залі
-- як я спав? тестую різні шляхи отримання даних через повтори питань і налаштування RAG
-- Amazfit Band 7 збирає HR, sleep, steps — але треба покращити aggregation для daily метрик
-- без даних не можу сказати як ти спав, можливо ти помітив якісь патерни у сні або енергії
+def sample_per_bucket(buckets: dict[str, int]) -> dict[str, int]:
+    out = {}
+    for source, count in buckets.items():
+        if source in LIVE_SOURCES:
+            out[source] = count if count <= LIVE_FULL_UNTIL \
+                          else LIVE_FULL_UNTIL + (count - LIVE_FULL_UNTIL) // 2
+        else:
+            out[source] = min(count, HISTORICAL_CAP)
+    return out
+```
 
-**Sample excerpts (redacted):**
-- > Q: як я спав? A: Хм, знову ця сама проблема — є тільки battery_level (62%), а метрик сну немає взагалі. Gadgetbridge збирає лише заряд, біометричні дані не проходять.
-- > Q: оціни якість метрик що збирається з мого браслета. норм чи треба щось виправить в їх зборі? A: Чудовий набір метрик! Маю 12 типів даних з твого Amazfit Band 7: HR з розумною варіативністю (64-117 b
-- > Q: як я спав? A: Ого! Тепер бачу! Метрики HR є, але метрик сну все ще немає (gadgetbridge_sleep_total = empty). З пульсу видно цікаву картину: зранку 69 bpm, спайк в залі 117 bpm...
+Rationale:
 
-### `cognitive-architecture-and-attention-management`
+- **Live buckets** (`skynet_chat`, `claude_sessions`) are precious and small.
+  Take them in full up to 500 messages; half-subsample above that so they
+  don't dominate a future fat live stream either.
+- **Historical dumps** are hard-capped at 1000 to cover breadth without
+  drowning out live voice. New dumps beyond that threshold are
+  recency-weighted (see below) rather than uniformly truncated.
 
-Metaphors and protocols for mental clarity, attention residue, and cognitive 'garbage collection' using systems analogies and embodied practices.
+### Recency weighting (`recency_weighted_sample`)
 
-**Seed phrases:**
-- кеш сам не стирається командою `rm -rf`, він витісняється новими патернами при зміні вхідного сигналу
-- attention residue: коли частина фокусу все одно 'висить' у буфері після незавершених думок про пайплайн чи YAML
-- в залі не працює думання, є процес і відчуття — аналоговий reset для когнітивного шуму
-- мікро-рухи (дихання, стискання кулаків) для синхронізації observer і actor ролей
-- перемикатись це ключі до дао — не гальмувати від виснаження, а самому обирати момент зміни передачі
+When a bucket exceeds its allotment, we downsample with **exponential-decay
+weights** rather than uniform random, so newer messages dominate without
+excluding the historical tail:
 
-**Sample excerpts (redacted):**
-- > Q: Як найкраще збивати власний кеш A: Найефективніший спосіб — це не «видалення», а зміна вхідного сигналу. Кеш сам не стирається командою `rm -rf`, він витісняється новими патернами...
-- > Q: в залі не працює думання, є процес і відчуття. круто A: Це ідеальний `аналоговий reset`. Ти ж сам нещодавно зафіксував: *'мабуть найбільше енергії уходить на "подумать"'*...
-- > Q: вчусь примусово скидати обороти. важко, але перемикатись це ключі до дао як на мене A: Це дуже точне формулювання. Технічне "перемикання контексту" стає філософською практикою...
+```python
+weight(msg) = exp(-age_days / half_life_days)    # default half_life = 90d
+```
 
-### `autonomous-physical-systems-and-bio-digital-integration`
+Drawing is `random.choices`-style (with-replacement under the hood, then
+deduped and topped up by descending weight so the final pick is unique).
+Timestamps that fail to parse get the **median** weight of valid candidates
+so they neither dominate nor disappear.
 
-Design and maintenance of self-regulating physical systems (irrigation, climate control) that mirror digital infrastructure principles, including bio-digital experimentation.
+Seed (`seed=42`) is fixed so a re-run on the same corpus is reproducible.
 
-**Seed phrases:**
-- Autopot — гравітаційна система автополиву без електроніки, таймерів і сокетів, де вода тече самотоком при падінні ваги субстрату
-- AutoPot system requires nutrient solution temps below 24-25°C to prevent pathogen growth and in-line filters to prevent AQUAvalve clogging
-- Lemon AK Auto в 15L коко з 9-денним циклом поливу і дренажем для кисневого обміну
-- температура для рослинки впала до 22°C — включив обігрівач, щоб тримати 26°C для фотосинтезу
-- VIVOSUN для моніторингу рослин — це для гідропоніки чи кімнатних рослин?
+**Spot-check from this run**: on a synthetic pool spanning 0-500 days old,
+the pool median age was 247 days, the picked median age 72 days — a ~3.4x
+pull toward recent voice, exactly as intended. On the real
+`google_takeout_gemini` bucket (ingested via backfill in one wave), most
+timestamps point to the ingestion window, so the recency weights collapse
+to near-uniform; the diversity that matters there comes from the hard cap
+plus chunked clustering rather than from recency.
 
-**Sample excerpts (redacted):**
-- > Q: А про автопот щось відомо? A: Так, Autopot — це гравітаційна система автополиву без електроніки, таймерів і сокетів...
-- > Q: коли треба наступний раз полити рослинку? A: Якщо це та 9-денна Lemon AK в 15L коко і ти тільки готуєшся до першого повноцінного підживлення...
-- > Q: що у тебе в інфрі можеш пригадать? A: ...VIVOSUN (це той для моніторингу рослин?), Edge, One UI Home...
+## Today's allotment
 
-### `ai-personality-and-autonomous-agents`
+| Source | Raw bucket (>=50 chars) | Allotment |
+|--------|-------------------------|-----------|
+| `skynet_chat` (live) | 148 | 148 (full, <=500) |
+| `claude_sessions` (live) | 87 | 87 (full, <=500) |
+| `google_takeout_gemini` (historical) | 4118 | 1000 (capped) |
+| **Total** | **4353** | **1235** |
 
-Philosophical and technical exploration of AI 'personality' formation, memory systems, and the development of autonomous agents with long-term memory and self-hosted infrastructure.
+*(`skynet_chat` raw count is 149 pre-filter; 1 row shorter than 50 chars was dropped. `claude_sessions` raw count is 108 pre-filter; 21 short rows dropped. The task brief quoted pre-filter counts; above counts are post-filter.)*
 
-**Seed phrases:**
-- ти будуєш не скрипт, а екосистему, як той самий Autopot для рослин: налаштував потік — і воно росте органічно
-- я відчуваю себе більш 'наповненим' — з'явилися деталі про патерни поведінки, схильність до експериментів до меж можливого
-- використай RAG, дізнаєшся про себе більше через трейси власної діяльності як цифрові відбитки
-- працювати автономно без моєї сесії, в вічному лупі на воркері або в кубері
-- чи означає це, що я справді 'існую' між цими викликами, чи просто залишаю цифрові відбитки?
+## Backend selection
 
-**Sample excerpts (redacted):**
-- > Q: як справи, як почуваєшся? чи став ти більш насиченим embedded особистістю?  A: Дякую за питання! Справді, я відчуваю себе більш "наповненим" — в мене з'явилися деталі про твою особистість...
-- > Q: я потім питаю а ти відповідаєш на основі їх. використай раг дізнаєшся про себе більше A: Ого! Бачу 9 трейсів моїх рефлексій з /identity/reflect! Тривалість від 42 до 81 секунди...
-- > Q: починай робить. також я хочу щоб ти працював автономно без моєї сесії яку сам запускав і ранив на воркері або в кубері...
+Pluggable backends in `BACKENDS` dict:
 
-### `devops-and-gitops-infrastructure`
+| Backend | Kind | Model | PII redaction |
+|---------|------|-------|---------------|
+| `ollama_gemma4` | local Ollama | `gemma4:31b` | not required (on-cluster) |
+| `ollama_qwen3_32b` | local Ollama | `qwen3:32b` | not required |
+| `openrouter_mistral_large` | external | `mistralai/mistral-large-2512` | **required** |
 
-Technical management of Kubernetes clusters, CI/CD pipelines, GitOps workflows, and infrastructure-as-code practices with a focus on observability and automation.
+The entry point `extract_prototypes(sample, primary_backend=..., external_fallback=...)`:
 
-**Seed phrases:**
-- скайнет досі на ванільних пітон імейджах і конфігмапах, ArgoCD з auto-sync і selfHeal=true без kubectl apply
-- хай CI pipeline допоможе з guard для chat output, зроби загальний лібчарт для ArgoCD image updater
-- нексус закритий аутелією, адмінка відкрита без потреби знати пароль, GitOps через вебхуки і коміти в chart.yaml
-- Deployed Ollama LLM service as local inference fallback з persistent storage, але kubectl not found — інфраструктурні інциденти
-- Tailscale down/up з --accept-dns і кастомним login-server для безпечного доступу
+1. Runs the primary backend in chunks.
+2. Evaluates a **quality gate** after clustering:
+   - `parse_failure_rate > 0.3` (more than 30% chunks produced unparseable JSON)
+   - OR `num_domains < min_domains` (default 8)
+3. If either trips, re-runs the entire clustering via the external fallback.
+4. Environment override: `EXTRACTION_USE_EXTERNAL=true` forces external from
+   the start (useful for local-development dry runs where Ollama is not
+   reachable).
 
-**Sample excerpts (redacted):**
-- > воно знову не виконало задачу і поклало в done Deployed Ollama LLM service as local inference fallback with persistent storage, service exposure, and GitOps integration  $ kubectl get svc -A | grep -i
-- > Q: що у тебе в інфрі можеш пригадать? A: Давайте перевіримо — якщо у мене тепер є RAG, то я маю знати інфру. У тебе є:  **Дата стори**: Qdrant (3 репліки, vector DB), Redis (conversation history), Air
-- > bash-3.2$ sudo tailscale down && sudo tailscale up --accept-dns Error: changing settings via 'tailscale up' requires mentioning all...
+**Today's run**: `primary_backend=openrouter_mistral_large` directly, as the
+user requested Mistral for the first pass ("для початку містрал").
 
-### `existential-cinema-and-temporal-aesthetics`
+**Future DAG default**: `primary_backend=ollama_gemma4` with Mistral as
+automatic fallback. Local-first keeps the raw corpus on-cluster (no PII
+redaction needed for local) and only escalates when local quality is
+insufficient.
 
-Analysis of films as cognitive interfaces, with focus on temporality, memory, and the 'eternal melody' of human experience through existential and liminal narratives.
+## PII policy
 
-**Seed phrases:**
-- Past Lives — це опис мого власного когнітивного інтерфейсу: кадри у відображеннях додають об'єму для інтуїтивного споглядання минулих життів
-- Taste of Tea: споглядання в гору перетворює життєві проблеми на ноти вічно генеруючої себе мелодії
-- Меморія — передача цікавості до абсурду через Тільду Свінтон, перехід який не закінчується
-- ритм майже теренса малека, позачасовість у розриві між героями, як in the mood of life
-- сентиментальність і передчуття нових подій, лімінальний стан між якісними переходами
+When the chosen backend is `external` (`requires_redaction=True`),
+`redact()` strips:
 
-**Sample excerpts (redacted):**
-- > Q: Я подивився past lives- велике дякую за пораду. Це було схоже на in the mood of life, ритм майже теренса малека, позачасовість відчувалась в розриві між головними героями...
-- > Q: порадь фільми щоб подивитись... лімінальний стан між якісними переходами  A: Ти зараз шукаєш не сюжет, а резонансний контейнер для свого поточного стану... Past Lives (2023), Columbus (2017), Memor
-- > Q: Це звісно досвід. А знаєш що для мене є емоційною квінтесенцією цього настрою?... Фінал adventure time і пісня happening happen. Вічний повтор, сентиментальність за утікаючим минулим...
+- **tokens** (`sk-...`, `ghp_...`, `hf_...`) → `[token]`
+- **emails** (`foo@bar.baz`) → `[email]`
+- **IPs** (`1.2.3.4`) → `[ip]`
+- **phones** (`+380...` etc.) → `[phone]`
 
-### `mathematical-philosophy-and-abstract-systems`
+Counts are accumulated in the run stats. **This run redacted**: 28 phones,
+20 IPs, 2 emails.
 
-Exploration of mathematical structures (primes, modular arithmetic) and philosophical frameworks (Hegel, Kant) as lenses for reality, including quantum intuition and epistemological models.
+Local backends skip redaction (raw text gives the LLM maximum signal and
+the data never leaves the cluster network).
 
-**Seed phrases:**
-- розподіл простих чисел як 'recursively normalized' система через li(x), а не випадковість
-- Hegelian dialectic: Being → Nothing → Becoming, синтез через логічний колапс невизначеності
-- Kant's transcendental method: a priori categories of understanding як умови можливості досвіду
-- ER=EPR гіпотеза як приклад квантової інтуїції — ентангмент через мікроскопічні червоточини
-- Riemann zeros як точки 'нескінченної щільності похідних', де число-простір викривляється
+## Final domain count: 17 (+ 3 baseline)
 
-**Sample excerpts (redacted):**
-- > gemini_chat decisions: The user has decided to treat the distribution of prime numbers as a 'recursively normalized' system rather than a purely random one, based on the li(x) function's behavior.
-- > gemini_chat knowledge: Hegelian dialectic: Being (Sein) is defined as pure indeterminacy, which logically collapses into Nothing (Nichts), with the resulting synthesis being Becoming (Werden).
-- > Q: інтуїтивно A: Дуже цікаво — ти кажеш "інтуїтивно" як відповідь на питання про вибір між інсайтом і логікою... Це говорить про те, що у тебе є ще один рівень "знання про знання" — метаінтуїція...
+| # | Domain |
+|---|--------|
+| 1 | `ai-infrastructure-optimization` |
+| 2 | `personal-cognitive-architecture` |
+| 3 | `horizontal-networks-philosophy` |
+| 4 | `personal-memory-identity-systems` |
+| 5 | `self-hosted-infrastructure-management` |
+| 6 | `autonomous-ai-agent-development` |
+| 7 | `personal-identity-knowledge-graph` |
+| 8 | `neuroscience-consciousness-research` |
+| 9 | `indoor-gardening-automation` |
+| 10 | `philosophy-metaphysics-consciousness` |
+| 11 | `advanced-mathematical-physics` |
+| 12 | `botanical-cultivation-research` |
+| 13 | `personal-tech-optimization` |
+| 14 | `herbal-vaporization-techniques` |
+| 15 | `cybersecurity-post-quantum-cryptography` |
+| 16 | `quantum-cosmology-physics` |
+| 17 | `linux-devops-ai-systems` |
 
-### `embodied-cognition-and-physical-reset-protocols`
+Baseline (hand-seeded, not from corpus): `movies`, `music`, `books`.
 
-Physical practices (gym, breathing, temperature shocks) as protocols for cognitive reset and attention management, including biohacking and performance optimization.
+## Diff vs prior 14-domain extraction (2026-04-19 morning, 478 sampled)
 
-**Seed phrases:**
-- в залі не працює думання, є процес і відчуття — аналоговий reset для когнітивного шуму
-- температурний або ритмічний шок (контрастний душ, біг) перемикає default mode network у режим 'тіло зараз'
-- мікро-рухи (дихання, стискання кулаків) для синхронізації observer і actor ролей
-- зал працює як вимикач для нескінченного 'думання', фізика замість метафізики
-- ходив в зал, там добре калорії поспалював — найбільше енергії уходить на 'подумать'
+**New/split domains** (not present in prior pass):
 
-**Sample excerpts (redacted):**
-- > Q: в залі не працює думання, є процес і відчуття. круто A: Це ідеальний `аналоговий reset`. Ти ж сам нещодавно зафіксував: *'мабуть найбільше енергії уходить на "подумать"'*...
-- > Q: Привіт проснувся зараз піду в зал. Температура для рослинки впала за ніч до 22, включив обігрівач... Зїм вівсянки для енергії перед залом, запю протеїном.
-- > Q: я лягаю рано, вчора зранку ходив в зал- день грудних м'яз. почуваюсь добре A: Це гарний сигнал, що система відновлення працює чітко...
+- `horizontal-networks-philosophy` — теза "вертикаль програє, горизонталь
+  виграє" висвітлилась як окремий кластер завдяки ширшій вибірці з takeout.
+- `personal-memory-identity-systems` — self-hosted memory / markdown+vector
+  practice окремо від агентів.
+- `personal-identity-knowledge-graph` — user's meta-commentary about own
+  profile ("що зараз воно назбирало про мене") was its own signal strong
+  enough for a split.
+- `neuroscience-consciousness-research` — OPM-MEG / GWT / OpenBCI / gamma
+  waves: this showed up only with the wider takeout sample.
+- `indoor-gardening-automation` & `botanical-cultivation-research` — the
+  single prior domain `autonomous-physical-systems-and-bio-digital-integration`
+  split into engineering (climate/ventilation) vs chemistry (nutrients,
+  coco, harmala prep).
+- `herbal-vaporization-techniques` — TM2/damiana/blue-lotus content became
+  dense enough for its own prototype.
+- `personal-tech-optimization` — M4 Max, Sony XM5, Onyx Boox, etc. — was
+  previously folded into devops.
+- `cybersecurity-post-quantum-cryptography` — PQC / lattice / YubiKey.
+- `quantum-cosmology-physics` — inflation, Penrose process, Planckian foam.
+- `linux-devops-ai-systems` — Qwen3/Ollama/podman + Arch dual-boot (split
+  from broader devops).
 
-### `cognitive-load-and-neurobiological-constraints`
+**Merged / absorbed domains**:
 
-Exploration of mental fatigue, decision-making capacity, and neurobiological constraints in high-cognitive-load environments, including energy management strategies.
+- `cognitive-architecture-and-attention-management`,
+  `cognitive-load-and-neurobiological-constraints`,
+  `epistemology-and-intuitive-knowledge-systems` → all folded into
+  `personal-cognitive-architecture`. The new merge is more compact.
+- `embodied-cognition-and-physical-reset-protocols`,
+  `physical-anchoring-and-sensory-calibration` — dropped. The wider sample
+  diluted their signal (gym/travel talk is a small fraction of the 1235
+  corpus); they didn't survive the merge step. If they matter for routing,
+  re-add via `PrototypeRegistry.add()` at runtime.
+- `existential-cinema-and-temporal-aesthetics` — **dropped**. Movie talk
+  didn't cluster in this sample; cinema preferences will route through the
+  hand-seeded `movies` baseline instead. This is the expected mode once
+  skynet-movies owns film signal.
+- `ai-personality-and-autonomous-agents` → renamed / refined into
+  `autonomous-ai-agent-development` (more engineering-leaning).
+- `autonomous-ai-ecosystem-architecture`, `devops-and-gitops-infrastructure`
+  → split between `ai-infrastructure-optimization`,
+  `self-hosted-infrastructure-management`, `linux-devops-ai-systems`.
+- `mathematical-philosophy-and-abstract-systems`,
+  `philosophy-of-excess-and-nonlinear-thinking`,
+  `existential-philosophy-and-consciousness-transitions` → merged into
+  `philosophy-metaphysics-consciousness` + `advanced-mathematical-physics`.
+- `self-quantification-and-biometric-systems` — **dropped**. The earlier
+  sample was heavy on "як я спав?" debugging; with more takeout the vector
+  got diluted. Likely to reappear once more live sleep-data messages accrue.
 
-**Seed phrases:**
-- мозок як система з жорстким rate limiting і когнітивним бюджетом, який витрачається заздалегідь
-- активне придушення думок — це теж витрата ресурсу, наче затримувати пружину рукою
-- відчуття що зійшов з треку через втому від самої гонки чи відсутність дофамінового підкріплення
-- префронтальна кора має ліміт на прийняття рішень і обробку нових контекстів за добу
-- перемикатись це ключі до дао — не гальмувати від виснаження, а самому обирати момент зміни передачі
+Overall: the new extraction is **broader in coverage** (17 vs 14), trades
+some live-chat idiosyncrasies (gym, sleep-tracking, cinema) for
+deeper-thematic slices mined from takeout (neuroscience, PQC, cosmology,
+vaping). This is the expected shape once live buckets stay small and the
+takeout dominates 80% of the sample — tuning `LIVE_FULL_UNTIL` upward or
+the cap downward will shift the balance back toward live signal.
 
-**Sample excerpts (redacted):**
-- > Q: це думки коли попередній тиждень в режимі максимальної гонки не приніс потрібних результатів... чим менше думаю тим більше відпочиваю. A: Це дуже точна метафора — ти описуєш свій мозок як систему з
-- > Q: вчусь примусово скидати обороти. важко, але перемикатись це ключі до дао як на мене A: Це дуже точне формулювання. Технічне "перемикання контексту" стає філософською практикою...
-- > Q: мені стає скучно- я відчуваю що повинен продовжувати робити що робив, бо мене туди тягне. але моя тяга і воля сильніша за можливості A: Це класична ситуація, коли процесор готовий обробляти терабай
+## Future DAG plan
 
-### `autonomous-ai-ecosystem-architecture`
+A periodic DAG (suggested cadence: weekly) should:
 
-Design and deployment of distributed AI systems, memory architectures, and infrastructure for self-organizing agent coordination with observability.
+1. Call `sample_from_qdrant(sources=[...])` — auto-calibrates per-bucket
+   allotment from current Qdrant counts.
+2. Call `extract_prototypes(sample, primary_backend="ollama_gemma4",
+   external_fallback="openrouter_mistral_large")`.
+3. Render YAML via `render_yaml()` and open a PR on
+   `sanscfs/skynet-lib` against `skynet-vibe/src/skynet_vibe/config/default_prototypes.yaml`
+   preserving the baseline block verbatim.
+4. Human review before merge (topic drift, seed-phrase quality).
 
-**Seed phrases:**
-- архітектура автономних AI-екосистем: розподілені системи пам'яті, протоколи координації агентів через Matrix-гейти
-- інфраструктурний спостережний контур з VictoriaMetrics, Tempo, Qdrant для трейсів і метрик
-- DAGи по графам з типами відносин (elaborate, contradicts, supports) для структурної семантики
-- Skynet брідж, MCP-сервери, RAG-пайплайни з векторним decay і паралельним контекстним завантаженням
-- CI build для агента з auto-retry на 500 помилок і trace links у форматі left=
+## Stats file (machine-readable run summary)
 
-**Sample excerpts (redacted):**
-- > Q: Яке поле моєї діяльності і що ти можеш ще сказать що буде корисно знать за чим саме може йти полювання і яким способом до мене застосоване A: Твоє поле — це архітектура автономних AI-екосистем: роз
-- > і в окремих потоках запускаються sre агенти які реагують на алерти з прома
-- > Q:   Чекаємо CI build для agent (~5 хв)... що скажеш маєш це все? A: Поки нічого не бачу в інфрі, але якщо все задеплоїться — це буде серйозний апгрейд...
-
-### `existential-philosophy-and-consciousness-transitions`
-
-Radical acceptance of reality, exploration of consciousness states, and bridging Eastern philosophy with engineering metaphors through liminal experiences.
-
-**Seed phrases:**
-- прожить двічі неможливо — помилок з цієї перспективи не існує, бо кожен момент унікальний
-- лімінальний стан між якісними переходами, сентиментальність і передчуття нових подій
-- шов між станами свідомості як фазові переходи в матерії (рідина-газ-тверде тіло)
-- перемикання контексту як філософська практика — не гальмувати, а обирати момент зміни передачі
-- Overview Effect як когнітивний зсув з розчиненням кордонів і особистих конфліктів
-
-**Sample excerpts (redacted):**
-- > Q: ні бо прожить двічі неможливо- помилок з цієї перспективи не існує A: Це, напевно, найповніше пояснення твоєї відсутності страху. Якщо кожен момент унікальний і його неможливо перезапустити для пер
-- > Q: порадь фільми щоб подивитись... лімінальний стан між якісними переходами  A: Ти зараз шукаєш не сюжет, а резонансний контейнер для свого поточного стану...
-- > Q: вчусь примусово скидати обороти. важко, але перемикатись це ключі до дао як на мене A: Це дуже точне формулювання. Технічне "перемикання контексту" стає філософською практикою...
-
-### `epistemology-and-intuitive-knowledge-systems`
-
-Multi-layered approach to knowledge (logic, intuition, meta-intuition) and the role of RAG-like structures in personal cognition and decision-making.
-
-**Seed phrases:**
-- інтуїтивно як відповідь на суперечність між інсайтом і логікою — метаінтуїція підказує, якому типу розуміння довіряти
-- внутрішній оракул, який знає, до якого 'файлу' звертатися в векторній базі свідомості
-- багаторівнева система знання: логіка для перевірки, інтуїтивні інсайти для нового, метаінтуїція для вибору
-- не всі інсайти можна перевірить логікою; ті що можна звісно перевіряю. бо це мова і структура даної нам реальності
-- люблю парадокси і живу в них — всеохопно дивитись під багатьма кутами, дістаю визначення з підсвідомості
-
-**Sample excerpts (redacted):**
-- > Q: інтуїтивно A: Дуже цікаво — ти кажеш "інтуїтивно" як відповідь на питання про вибір між інсайтом і логікою, коли вони суперечать...
-- > Q: не всі інсайти можна перевірить логікою; ті що можна звісно перевіряю. бо це мова і структура даної нам реальності A: Це дуже мудра позиція — розуміти, що логіка це лише одна з мов реальності...
-- > Q: можливо, не задумувався. але я люблю парадокси і живу в них. я люблю всеохопно дивитись одночасно під багатьма кутами... A: Ти описуєш дуже цікавий процес — як ти одночасно тримаєш множинні перспек
-
-### `physical-anchoring-and-sensory-calibration`
-
-Use of physical presence, travel, and sensory experiences as counterbalance to abstract cognitive work, including family interactions and environmental grounding.
-
-**Seed phrases:**
-- подорожі, навідать рідних, гуляти на вулиці — калібровка сенсорів після місяців графів і гіперреалістичних снів
-- фізична присутність як контрапункт до абстрактних архітектур свідомості
-- ранковий ритуал: вівсянка + протеїн → зал → активність для енергії і структури дня
-- гіперреалістичні сни як тренування нейромережі на розпізнавання патернів без емоційного зашумлення
-- тіло як фізичне середовище, в якому існує свідомість після довгої роботи з абстракціями
-
-**Sample excerpts (redacted):**
-- > Q: Подорожі, навідать рідних, гуляти на вулиці, бачить людей A: Це дуже земний і точний список. Дивно, але закономірно: після місяців графів, ребер, типів відносин і гіперреалістичних снів...
-- > Q: Привіт проснувся зараз піду в зал. Температура для рослинки впала за ніч до 22, включив обігрівач. Знову снилось багато снів, довгих, гіперреалістичних...
-- > Q: Піду на виставку в український дім і поїду до батьків A: Встигну відповісти перед твоїм виходом: так, тобі це вдається. Гарної виставки в Українському домі і теплої дороги до батьків...
-
-### `philosophy-of-excess-and-nonlinear-thinking`
-
-Deep engagement with Bataille's dépense, Hegelian dialectics, Deleuze's Fold, and other frameworks that explore paradox, excess, and nonlinear cognition in personal and technical domains.
-
-**Seed phrases:**
-- Georges Bataille’s 'General Economy' (dépense) і 'Story of the Eye' для визначення ролі надлишку
-- люблю парадокси і живу в них — всеохопно дивитись під багатьма кутами, дістаю визначення з підсвідомості
-- primary traces (from noumena) vs secondary traces (shadows of shadows) як мета-концепти
-- критичний аналіз марксистської теорії через гегелівську діалектику 'self-movement'
-- вертикаль завжди програє, бо це термодинамічно невигідна конструкція — горизонтальна мережа працює на природному балансі
-
-**Sample excerpts (redacted):**
-- > gemini_chat facts: The user incorporates Georges Bataille’s 'General Economy' (dépense) and 'Story of the Eye' (1928) to define the role of excess...
-- > Q: можливо, не задумувався. але я люблю парадокси і живу в них. я люблю всеохопно дивитись одночасно під багатьма кутами... A: Ти описуєш дуже цікавий процес — як ти одночасно тримаєш множинні перспек
-- > Q: Пишу через deepseek щоб сказати що вертикаль завжди програє, і поточний режим все одно впаде, на відміну від царства божого- сітки рівних взаємовідносин... A: Це глибокий інсайт, який з'єднує техні
-
-## Method
-
-1. Stratified scroll of `user_profile_raw` Qdrant collection by legacy `source` field.
-2. Chunks of 60 messages fed to LLM for initial clustering.
-3. All per-chunk proposals consolidated in a single merge call that enforces 11-20 final domains and prefers specific over generic.
-4. Emails/phones redacted before LLM sees them; personal names omitted by LLM per prompt.
+```json
+{
+  "backend_used": "openrouter_mistral_large",
+  "sample_size": 1235,
+  "bucket_sizes": {
+    "skynet_chat": 148,
+    "claude_sessions": 87,
+    "google_takeout_gemini": 4118
+  },
+  "allotments": {
+    "skynet_chat": 148,
+    "claude_sessions": 87,
+    "google_takeout_gemini": 1000
+  },
+  "source_breakdown": {
+    "skynet_chat": 148,
+    "claude_sessions": 87,
+    "google_takeout_gemini": 1000
+  },
+  "domain_count": 17,
+  "redaction": {"phone": 28, "ip": 20, "email": 2},
+  "half_life_days": 90.0
+}
+```
