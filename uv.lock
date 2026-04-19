@@ -1546,7 +1546,7 @@ dev = [
 
 [[package]]
 name = "skynet-matrix"
-version = "2026.4.19"
+version = "2026.4.19.1"
 source = { editable = "packages/skynet-matrix" }
 dependencies = [
     { name = "httpx" },
@@ -1563,7 +1563,7 @@ requires-dist = [
 
 [[package]]
 name = "skynet-mcp"
-version = "2026.4.19"
+version = "2026.4.19.1"
 source = { editable = "packages/skynet-mcp" }
 dependencies = [
     { name = "fastapi" },
@@ -1587,7 +1587,7 @@ provides-extras = ["otel"]
 
 [[package]]
 name = "skynet-postgres"
-version = "2026.4.19"
+version = "2026.4.19.1"
 source = { editable = "packages/skynet-postgres" }
 dependencies = [
     { name = "asyncpg" },
