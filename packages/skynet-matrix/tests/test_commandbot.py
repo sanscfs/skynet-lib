@@ -473,3 +473,136 @@ async def test_react_swallows_send_errors():
 
     resp = await bot.react("!room:test", "$e:1", "\u2705")
     assert resp is None
+
+
+# -- 15. post_recommendation writes rec_trail + reverse lookup --------------
+
+
+def _fake_sync_redis():
+    """Minimal sync redis stand-in: records hset/expire/set calls."""
+    r = MagicMock()
+    r.hset = MagicMock(return_value=1)
+    r.expire = MagicMock(return_value=True)
+    r.set = MagicMock(return_value=True)
+    return r
+
+
+@pytest.mark.asyncio
+async def test_post_recommendation_writes_trail():
+    bot, client = _make_bot()
+    client.room_send = AsyncMock(return_value=SimpleNamespace(event_id="$rec:1"))
+    r = _fake_sync_redis()
+
+    event_id = await bot.post_recommendation(
+        "!room:test",
+        "How about Parallax View?",
+        rec_id="rec-42",
+        domain="movies",
+        title="The Parallax View",
+        redis_client=r,
+    )
+
+    assert event_id == "$rec:1"
+
+    # Posted to Matrix.
+    client.room_send.assert_awaited_once()
+    call = client.room_send.await_args
+    assert call.kwargs["room_id"] == "!room:test"
+    assert call.kwargs["content"]["body"] == "How about Parallax View?"
+
+    # Trail hash written with full fields.
+    r.hset.assert_called_once()
+    hset_call = r.hset.call_args
+    assert hset_call.args[0] == "skynet:rec_trail:rec-42"
+    mapping = hset_call.kwargs["mapping"]
+    assert mapping["room_id"] == "!room:test"
+    assert mapping["event_id"] == "$rec:1"
+    assert mapping["title"] == "The Parallax View"
+    assert mapping["domain"] == "movies"
+    assert int(mapping["suggested_at"]) > 0
+
+    # TTL applied to trail hash.
+    r.expire.assert_called_once()
+    assert r.expire.call_args.args[0] == "skynet:rec_trail:rec-42"
+
+    # Reverse lookup: event_id -> rec_id
+    r.set.assert_called_once()
+    set_call = r.set.call_args
+    assert set_call.args == ("skynet:vibe:rec_id:$rec:1", "rec-42")
+    assert "ex" in set_call.kwargs
+
+
+@pytest.mark.asyncio
+async def test_post_recommendation_without_redis_still_posts():
+    bot, client = _make_bot()
+    client.room_send = AsyncMock(return_value=SimpleNamespace(event_id="$rec:2"))
+
+    event_id = await bot.post_recommendation(
+        "!room:test",
+        "pick",
+        rec_id="rec-1",
+        redis_client=None,
+    )
+    assert event_id == "$rec:2"
+    client.room_send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_post_recommendation_skips_trail_when_send_fails():
+    bot, client = _make_bot()
+    client.room_send = AsyncMock(side_effect=RuntimeError("boom"))
+    r = _fake_sync_redis()
+
+    event_id = await bot.post_recommendation(
+        "!room:test",
+        "pick",
+        rec_id="rec-X",
+        redis_client=r,
+    )
+    assert event_id is None
+    r.hset.assert_not_called()
+    r.expire.assert_not_called()
+    r.set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_post_recommendation_accepts_async_redis_client():
+    bot, client = _make_bot()
+    client.room_send = AsyncMock(return_value=SimpleNamespace(event_id="$rec:3"))
+
+    async_r = MagicMock()
+    async_r.hset = AsyncMock(return_value=1)
+    async_r.expire = AsyncMock(return_value=True)
+    async_r.set = AsyncMock(return_value=True)
+
+    event_id = await bot.post_recommendation(
+        "!room:test",
+        "pick",
+        rec_id="rec-async",
+        redis_client=async_r,
+        domain="music",
+    )
+    assert event_id == "$rec:3"
+    async_r.hset.assert_awaited_once()
+    async_r.expire.assert_awaited_once()
+    async_r.set.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_post_recommendation_swallows_trail_errors():
+    bot, client = _make_bot()
+    client.room_send = AsyncMock(return_value=SimpleNamespace(event_id="$rec:4"))
+
+    r = MagicMock()
+    r.hset = MagicMock(side_effect=RuntimeError("redis down"))
+    r.expire = MagicMock()
+    r.set = MagicMock()
+
+    # Must not raise even though redis is unavailable.
+    event_id = await bot.post_recommendation(
+        "!room:test",
+        "pick",
+        rec_id="rec-err",
+        redis_client=r,
+    )
+    assert event_id == "$rec:4"

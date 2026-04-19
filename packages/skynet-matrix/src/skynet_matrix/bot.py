@@ -308,6 +308,107 @@ class CommandBot:
             logger.warning("post_message failed room=%s: %s", room_id, exc)
             return None
 
+    async def post_recommendation(
+        self,
+        room_id: str,
+        text: str,
+        rec_id: str,
+        *,
+        html: Optional[str] = None,
+        thread_root: Optional[str] = None,
+        domain: Optional[str] = None,
+        title: Optional[str] = None,
+        redis_client: Any = None,
+        ttl_seconds: int = 90 * 24 * 3600,
+    ) -> Optional[str]:
+        """Post a recommendation and record the ``rec_id`` -> event_id mapping.
+
+        Behaves like :meth:`post_message` but additionally persists a small
+        trail record in Redis so subsequent user reactions on the posted
+        message can be correlated back to the recommendation that
+        originated them.
+
+        Redis keys written (best-effort, never raises):
+
+        * ``skynet:rec_trail:{rec_id}`` — a hash with fields
+          ``room_id``, ``event_id``, ``title``, ``suggested_at``,
+          ``domain``. Set with a 90-day TTL.
+        * ``skynet:vibe:rec_id:{event_id}`` — a plain string pointing
+          back at ``rec_id``. Matches the key already consumed by
+          ``skynet_agent.modules.vibe_capture.absorber._resolve_rec_id``
+          so reactions on the event flow a ``linked_rec_id`` into the
+          vibe engine.
+
+        ``redis_client`` may be a sync or async redis client. If it is
+        ``None``, the trail is silently skipped (the message still
+        posts). This lets tests and degraded environments drop the
+        tracking without losing the recommendation itself.
+
+        Parameters
+        ----------
+        room_id, text, html, thread_root:
+            Same as :meth:`post_message`.
+        rec_id:
+            Recommendation identifier the caller assigns. Required — an
+            empty / missing rec_id skips the trail writes (use
+            :meth:`post_message` instead in that case).
+        domain, title:
+            Stored on the trail hash for later inspection.
+        redis_client:
+            Optional redis client (sync or async). Passed in by the
+            caller — CommandBot does not open its own connection.
+        ttl_seconds:
+            TTL on the trail hash. Defaults to 90 days.
+
+        Returns the posted message's ``event_id`` (or ``None`` on send
+        failure). The trail is only written when the send succeeds; we
+        never record a rec_id for a message that was never delivered.
+        """
+        import time
+
+        resp = await self.post_message(
+            room_id,
+            text,
+            html=html,
+            thread_root=thread_root,
+        )
+        if resp is None:
+            return None
+        event_id = getattr(resp, "event_id", None)
+        if not event_id or not rec_id:
+            return event_id
+
+        if redis_client is None:
+            return event_id
+
+        trail = {
+            "room_id": room_id,
+            "event_id": event_id,
+            "title": title or "",
+            "domain": domain or "",
+            "suggested_at": str(int(time.time())),
+        }
+        trail_key = f"skynet:rec_trail:{rec_id}"
+        reverse_key = f"skynet:vibe:rec_id:{event_id}"
+        try:
+            _maybe = redis_client.hset(trail_key, mapping=trail)
+            if asyncio.iscoroutine(_maybe):
+                await _maybe
+            _maybe = redis_client.expire(trail_key, int(ttl_seconds))
+            if asyncio.iscoroutine(_maybe):
+                await _maybe
+            _maybe = redis_client.set(reverse_key, rec_id, ex=int(ttl_seconds))
+            if asyncio.iscoroutine(_maybe):
+                await _maybe
+        except Exception as exc:
+            logger.warning(
+                "rec_trail write failed rec_id=%s event=%s: %s",
+                rec_id,
+                event_id,
+                exc,
+            )
+        return event_id
+
     async def react(self, room_id: str, event_id: str, emoji: str) -> Any:
         """Post an ``m.reaction`` to ``event_id`` in ``room_id``.
 
