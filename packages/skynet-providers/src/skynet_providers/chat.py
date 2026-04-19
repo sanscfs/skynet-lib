@@ -101,9 +101,7 @@ def chat_completion(
         raise ProviderError(f"transport error for {url}: {e}") from e
 
     if resp.status_code >= 400:
-        raise ProviderError(
-            f"upstream {resp.status_code} for {url}: {resp.text[:200]}"
-        )
+        raise ProviderError(f"upstream {resp.status_code} for {url}: {resp.text[:200]}")
     try:
         return _extract_content(resp.json())
     except ProviderError:
@@ -137,9 +135,7 @@ async def async_chat_completion(
         raise ProviderError(f"transport error for {url}: {e}") from e
 
     if resp.status_code >= 400:
-        raise ProviderError(
-            f"upstream {resp.status_code} for {url}: {resp.text[:200]}"
-        )
+        raise ProviderError(f"upstream {resp.status_code} for {url}: {resp.text[:200]}")
     try:
         return _extract_content(resp.json())
     except ProviderError:

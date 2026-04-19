@@ -8,7 +8,6 @@ downstream key without an extra config knob.
 from __future__ import annotations
 
 import logging
-import os
 from functools import lru_cache
 
 logger = logging.getLogger("skynet_providers.resolver")
