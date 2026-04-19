@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -144,3 +147,177 @@ def test_call_non_object_arguments_returns_400(client: TestClient) -> None:
     resp = client.post("/tools/ping_sync/call", json={"arguments": "not-a-dict"})
     assert resp.status_code == 400
     assert "error" in resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Upstream HTTP status passthrough
+# ---------------------------------------------------------------------------
+
+
+def _make_http_status_error(status_code: int) -> httpx.HTTPStatusError:
+    """Build an HTTPStatusError with a real response we can attach to it."""
+    request = httpx.Request("GET", "http://upstream.test/api")
+    response = httpx.Response(status_code=status_code, request=request)
+    return httpx.HTTPStatusError(
+        message=f"Server error '{status_code}'",
+        request=request,
+        response=response,
+    )
+
+
+def test_call_preserves_upstream_502_from_httpx_error() -> None:
+    registry = ToolRegistry()
+
+    @registry.tool(
+        name="upstream_call",
+        description="calls a flaky downstream",
+        schema={"type": "object"},
+    )
+    async def upstream_call() -> None:
+        raise _make_http_status_error(502)
+
+    app = FastAPI()
+    mount_mcp(app, registry)
+    client = TestClient(app)
+
+    resp = client.post("/tools/upstream_call/call", json={"arguments": {}})
+    assert resp.status_code == 502
+    body = resp.json()
+    assert "error" in body
+    assert "502" in body["error"]
+
+
+def test_call_preserves_upstream_404_from_httpx_error() -> None:
+    registry = ToolRegistry()
+
+    @registry.tool(name="upstream_404", description="", schema={"type": "object"})
+    async def upstream_404() -> None:
+        raise _make_http_status_error(404)
+
+    app = FastAPI()
+    mount_mcp(app, registry)
+    client = TestClient(app)
+
+    resp = client.post("/tools/upstream_404/call", json={"arguments": {}})
+    assert resp.status_code == 404
+    # 404 here means "upstream returned 404", NOT "unknown tool" -- the
+    # error body distinguishes the two.
+    assert "Upstream" in resp.json()["error"]
+
+
+def test_call_passthrough_any_exception_with_response_status_code() -> None:
+    """Duck-typed passthrough: non-httpx exceptions that carry a
+    ``.response.status_code`` (e.g. requests.HTTPError) also round-trip."""
+    registry = ToolRegistry()
+
+    class CustomHTTPError(Exception):
+        def __init__(self, status: int) -> None:
+            super().__init__(f"HTTP {status}")
+            self.response = SimpleNamespace(status_code=status)
+
+    @registry.tool(name="custom_http_err", description="", schema={"type": "object"})
+    async def custom_http_err() -> None:
+        raise CustomHTTPError(503)
+
+    app = FastAPI()
+    mount_mcp(app, registry)
+    client = TestClient(app)
+
+    resp = client.post("/tools/custom_http_err/call", json={"arguments": {}})
+    assert resp.status_code == 503
+
+
+def test_call_non_http_exception_still_becomes_500() -> None:
+    """Exceptions without a ``.response.status_code`` must continue to
+    surface as 500 -- the passthrough path is additive, not a
+    replacement for the generic fallback."""
+    registry = ToolRegistry()
+
+    @registry.tool(name="plain_err", description="", schema={"type": "object"})
+    async def plain_err() -> None:
+        raise ValueError("something broke")
+
+    app = FastAPI()
+    mount_mcp(app, registry)
+    client = TestClient(app)
+
+    resp = client.post("/tools/plain_err/call", json={"arguments": {}})
+    assert resp.status_code == 500
+    body = resp.json()
+    assert "ValueError" in body["error"]
+
+
+# ---------------------------------------------------------------------------
+# Configurable OTel span prefix
+# ---------------------------------------------------------------------------
+
+
+def test_mount_mcp_default_span_prefix_is_tool_underscore(monkeypatch) -> None:
+    """Default span_prefix is ``tool_`` so pre-library dashboards keep
+    matching the span name ``tool_{name}``."""
+    recorded: list[str] = []
+
+    class _FakeSpanCtx:
+        def __enter__(self) -> "_FakeSpanCtx":
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+    class _FakeTracer:
+        def start_as_current_span(self, name: str) -> _FakeSpanCtx:
+            recorded.append(name)
+            return _FakeSpanCtx()
+
+    import skynet_mcp.server as server_mod
+
+    monkeypatch.setattr(server_mod, "_TRACER", _FakeTracer())
+
+    registry = ToolRegistry()
+
+    @registry.tool(name="ping", description="", schema={"type": "object"})
+    def ping() -> dict:
+        return {"ok": True}
+
+    app = FastAPI()
+    mount_mcp(app, registry)  # default span_prefix
+    client = TestClient(app)
+    resp = client.post("/tools/ping/call", json={"arguments": {}})
+    assert resp.status_code == 200
+    assert recorded == ["tool_ping"]
+
+
+def test_mount_mcp_custom_span_prefix(monkeypatch) -> None:
+    """Services that want the namespaced form pass
+    ``span_prefix="mcp.tool."``; the emitted span becomes
+    ``mcp.tool.{name}``."""
+    recorded: list[str] = []
+
+    class _FakeSpanCtx:
+        def __enter__(self) -> "_FakeSpanCtx":
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+    class _FakeTracer:
+        def start_as_current_span(self, name: str) -> _FakeSpanCtx:
+            recorded.append(name)
+            return _FakeSpanCtx()
+
+    import skynet_mcp.server as server_mod
+
+    monkeypatch.setattr(server_mod, "_TRACER", _FakeTracer())
+
+    registry = ToolRegistry()
+
+    @registry.tool(name="ping", description="", schema={"type": "object"})
+    def ping() -> dict:
+        return {"ok": True}
+
+    app = FastAPI()
+    mount_mcp(app, registry, span_prefix="mcp.tool.")
+    client = TestClient(app)
+    resp = client.post("/tools/ping/call", json={"arguments": {}})
+    assert resp.status_code == 200
+    assert recorded == ["mcp.tool.ping"]
