@@ -291,11 +291,7 @@ class CommandBot:
             "msgtype": "m.text",
             "body": text,
             "format": "org.matrix.custom.html",
-            "formatted_body": (
-                html
-                if html is not None
-                else html_lib.escape(text).replace("\n", "<br/>")
-            ),
+            "formatted_body": (html if html is not None else html_lib.escape(text).replace("\n", "<br/>")),
         }
         if thread_root:
             content["m.relates_to"] = {
@@ -559,10 +555,7 @@ class CommandBot:
         """Render the help reply as text + HTML."""
         prefix = self.config.command_prefix
         lines = [f"Commands for {self.config.bot_name}:"]
-        html_rows = [
-            "<table><thead><tr><th>Command</th><th>Args</th>"
-            "<th>Description</th></tr></thead><tbody>"
-        ]
+        html_rows = ["<table><thead><tr><th>Command</th><th>Args</th><th>Description</th></tr></thead><tbody>"]
         for cmd in self.commands():
             args_hint = cmd.args_hint or ""
             lines.append(f"  {prefix}{cmd.name} {args_hint}  -- {cmd.description}")
@@ -574,17 +567,12 @@ class CommandBot:
         html_rows.append("</tbody></table>")
         return {
             "text": "\n".join(lines),
-            "html": (
-                f"<p><b>Commands for {html_lib.escape(self.config.bot_name or '')}</b></p>"
-                + "".join(html_rows)
-            ),
+            "html": (f"<p><b>Commands for {html_lib.escape(self.config.bot_name or '')}</b></p>" + "".join(html_rows)),
         }
 
     def _render_menu(self) -> dict[str, Any]:
         """Render the pinned command menu (HTML + plain)."""
-        header = self.config.menu_message_body or (
-            f"{self.config.bot_name} — available commands"
-        )
+        header = self.config.menu_message_body or (f"{self.config.bot_name} — available commands")
         help_body = self._render_help()
         return {
             "text": f"{header}\n\n{help_body['text']}",

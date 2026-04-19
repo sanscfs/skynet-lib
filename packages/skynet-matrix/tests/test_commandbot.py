@@ -212,7 +212,7 @@ def test_state_event_payload_shape():
             description="Show recent watched movies",
             handler=AsyncMock(),
             args_hint="[limit]",
-            emoji="\U0001F3AC",
+            emoji="\U0001f3ac",
         )
     ]
     content = build_bot_commands_content(
@@ -228,7 +228,7 @@ def test_state_event_payload_shape():
                 "name": "list-watched-movies",
                 "description": "Show recent watched movies",
                 "args_hint": "[limit]",
-                "emoji": "\U0001F3AC",
+                "emoji": "\U0001f3ac",
             }
         ],
     }
@@ -290,7 +290,7 @@ async def test_reaction_dispatches_command():
 
     seen = {}
 
-    @bot.command(name="watched", description="Show watched", emoji="\U0001F3AC")
+    @bot.command(name="watched", description="Show watched", emoji="\U0001f3ac")
     async def watched(event, args):
         seen["hit"] = True
         return "list"
@@ -298,7 +298,7 @@ async def test_reaction_dispatches_command():
     room = SimpleNamespace(room_id="!room:test")
     event = SimpleNamespace(
         sender="@user:test",
-        key="\U0001F3AC",
+        key="\U0001f3ac",
         reacts_to="$menu:1",
     )
     await bot.handle_reaction_event(room, event)
@@ -311,14 +311,14 @@ async def test_reaction_on_other_message_ignored():
     bot, client = _make_bot()
     bot._menu_message_ids["!room:test"] = "$menu:1"
 
-    @bot.command(name="watched", description="", emoji="\U0001F3AC")
+    @bot.command(name="watched", description="", emoji="\U0001f3ac")
     async def watched(event, args):  # pragma: no cover -- must not run
         return "nope"
 
     room = SimpleNamespace(room_id="!room:test")
     event = SimpleNamespace(
         sender="@user:test",
-        key="\U0001F3AC",
+        key="\U0001f3ac",
         reacts_to="$not-the-menu",
     )
     await bot.handle_reaction_event(room, event)
@@ -451,7 +451,7 @@ async def test_post_message_swallows_send_errors():
 async def test_react_builds_correct_annotation_payload():
     bot, client = _make_bot()
 
-    resp = await bot.react("!room:test", "$target:event", "\U0001F44D")
+    resp = await bot.react("!room:test", "$target:event", "\U0001f44d")
     assert resp is not None
 
     client.room_send.assert_awaited_once()
@@ -462,7 +462,7 @@ async def test_react_builds_correct_annotation_payload():
     assert content["m.relates_to"] == {
         "rel_type": "m.annotation",
         "event_id": "$target:event",
-        "key": "\U0001F44D",
+        "key": "\U0001f44d",
     }
 
 

@@ -77,9 +77,7 @@ class VaultClient:
     ) -> None:
         self.addr = addr or os.getenv("VAULT_ADDR", DEFAULT_VAULT_ADDR)
         self.role = role or os.getenv("VAULT_ROLE")
-        self.token_path = token_path or os.getenv(
-            "VAULT_K8S_TOKEN_PATH", DEFAULT_K8S_TOKEN_PATH
-        )
+        self.token_path = token_path or os.getenv("VAULT_K8S_TOKEN_PATH", DEFAULT_K8S_TOKEN_PATH)
         # hvac_client injection is purely a test seam.
         self._client: hvac.Client | None = hvac_client
         self._lock = threading.Lock()
@@ -91,15 +89,11 @@ class VaultClient:
     def _read_sa_token(self) -> str:
         path = Path(self.token_path)
         if not path.exists():
-            raise VaultAuthError(
-                f"K8s ServiceAccount token not found at {self.token_path}"
-            )
+            raise VaultAuthError(f"K8s ServiceAccount token not found at {self.token_path}")
         try:
             return path.read_text().strip()
         except OSError as exc:
-            raise VaultAuthError(
-                f"failed to read SA token at {self.token_path}: {exc}"
-            ) from exc
+            raise VaultAuthError(f"failed to read SA token at {self.token_path}: {exc}") from exc
 
     def authenticate(self) -> None:
         """Log in to Vault using the pod's K8s ServiceAccount JWT.
@@ -108,9 +102,7 @@ class VaultClient:
         `is_authenticated()` we skip the round-trip.
         """
         if not self.role:
-            raise VaultConfigError(
-                "VAULT_ROLE is not set; cannot authenticate to Vault"
-            )
+            raise VaultConfigError("VAULT_ROLE is not set; cannot authenticate to Vault")
 
         with self._lock:
             if self._client is not None:
@@ -127,18 +119,12 @@ class VaultClient:
                 self._client.auth.kubernetes.login(role=self.role, jwt=jwt)
             except Exception as exc:  # hvac raises a zoo of error classes
                 raise VaultAuthError(
-                    f"Vault K8s auth failed (addr={self.addr}, role={self.role}): "
-                    f"{type(exc).__name__}"
+                    f"Vault K8s auth failed (addr={self.addr}, role={self.role}): {type(exc).__name__}"
                 ) from exc
 
             if not self._client.is_authenticated():
-                raise VaultAuthError(
-                    f"Vault K8s auth returned no usable token "
-                    f"(addr={self.addr}, role={self.role})"
-                )
-            logger.info(
-                "authenticated to Vault (addr=%s, role=%s)", self.addr, self.role
-            )
+                raise VaultAuthError(f"Vault K8s auth returned no usable token (addr={self.addr}, role={self.role})")
+            logger.info("authenticated to Vault (addr=%s, role=%s)", self.addr, self.role)
 
     def _ensure_client(self) -> hvac.Client:
         if self._client is None or not self._client.is_authenticated():
@@ -165,8 +151,7 @@ class VaultClient:
                     client.auth.kubernetes.login(role=self.role, jwt=jwt)
                 except Exception as exc:  # noqa: BLE001
                     raise VaultAuthError(
-                        f"Vault K8s re-auth failed (addr={self.addr}, "
-                        f"role={self.role}): {type(exc).__name__}"
+                        f"Vault K8s re-auth failed (addr={self.addr}, role={self.role}): {type(exc).__name__}"
                     ) from exc
             return fn(client)
 
@@ -186,18 +171,14 @@ class VaultClient:
         relative = path
         prefix = f"{mount_point}/"
         if relative.startswith(prefix):
-            relative = relative[len(prefix):]
+            relative = relative[len(prefix) :]
 
         data = self.read_kv_all(relative, mount_point=mount_point)
         if key not in data:
-            raise VaultSecretNotFound(
-                f"key '{key}' not present at {mount_point}/{relative}"
-            )
+            raise VaultSecretNotFound(f"key '{key}' not present at {mount_point}/{relative}")
         return data[key]
 
-    def read_kv_all(
-        self, path: str, *, mount_point: str = "secret"
-    ) -> dict[str, Any]:
+    def read_kv_all(self, path: str, *, mount_point: str = "secret") -> dict[str, Any]:
         """Read every key at a KV-v2 secret path.
 
         Useful when a single Vault path bundles related credentials
@@ -206,7 +187,7 @@ class VaultClient:
         relative = path
         prefix = f"{mount_point}/"
         if relative.startswith(prefix):
-            relative = relative[len(prefix):]
+            relative = relative[len(prefix) :]
 
         def _call(client: hvac.Client) -> dict[str, Any]:
             try:
@@ -216,9 +197,7 @@ class VaultClient:
                     raise_on_deleted_version=True,
                 )
             except InvalidPath as exc:
-                raise VaultSecretNotFound(
-                    f"no secret at {mount_point}/{relative}"
-                ) from exc
+                raise VaultSecretNotFound(f"no secret at {mount_point}/{relative}") from exc
             return resp["data"]["data"]
 
         return self._with_reauth(_call)
@@ -247,26 +226,19 @@ class VaultClient:
 
         def _call(client: hvac.Client) -> DynamicDBCreds:
             try:
-                resp = client.secrets.database.generate_credentials(
-                    name=role, mount_point=mount_point
-                )
+                resp = client.secrets.database.generate_credentials(name=role, mount_point=mount_point)
             except InvalidPath as exc:
-                raise VaultDBCredsError(
-                    f"no database role '{role}' at mount '{mount_point}'"
-                ) from exc
+                raise VaultDBCredsError(f"no database role '{role}' at mount '{mount_point}'") from exc
             except Exception as exc:  # noqa: BLE001
                 raise VaultDBCredsError(
-                    f"Vault refused to issue DB creds for role '{role}': "
-                    f"{type(exc).__name__}"
+                    f"Vault refused to issue DB creds for role '{role}': {type(exc).__name__}"
                 ) from exc
 
             data = resp.get("data") or {}
             username = data.get("username")
             password = data.get("password")
             if not username or not password:
-                raise VaultDBCredsError(
-                    f"Vault returned malformed DB creds payload for role '{role}'"
-                )
+                raise VaultDBCredsError(f"Vault returned malformed DB creds payload for role '{role}'")
             return DynamicDBCreds(
                 username=username,
                 password=password,
@@ -283,7 +255,9 @@ class VaultClient:
             self._db_creds[role] = creds
         logger.info(
             "issued DB creds (role=%s, user=%s, ttl=%ds)",
-            role, creds.username, creds.lease_duration,
+            role,
+            creds.username,
+            creds.lease_duration,
         )
         return creds
 

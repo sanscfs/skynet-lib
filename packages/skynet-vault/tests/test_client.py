@@ -67,9 +67,7 @@ def test_authenticate_calls_k8s_login_with_sa_jwt(tmp_path):
 
     client.authenticate()
 
-    hvac_stub.auth.kubernetes.login.assert_called_once_with(
-        role="skynet-movies", jwt="fake-jwt-value"
-    )
+    hvac_stub.auth.kubernetes.login.assert_called_once_with(role="skynet-movies", jwt="fake-jwt-value")
 
 
 def test_authenticate_raises_when_token_file_missing(tmp_path):
