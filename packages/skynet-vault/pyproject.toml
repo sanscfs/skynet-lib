@@ -1,0 +1,12 @@
+[project]
+name = "skynet-vault"
+version = "2026.4.19"
+description = "Skynet Vault client -- K8s ServiceAccount auth, KV reads, dynamic DB credentials"
+requires-python = ">=3.12"
+dependencies = [
+    "hvac>=2.0,<3.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
