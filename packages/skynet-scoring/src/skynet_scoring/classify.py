@@ -108,7 +108,7 @@ _BASE_SALIENCE_BY_PREFIX: Final[tuple[tuple[str, float], ...]] = (
     ("app_", 0.15),
     ("k8s_", 0.25),
     ("infra_", 0.25),
-    ("skynet_", 0.50),  # skynet_episodic, skynet_knowledge, etc.
+    ("skynet_", 0.50),  # skynet_episodic, skynet_self_traits, etc.
 )
 
 # Modifiers applied additively on top of the base salience. Signs
