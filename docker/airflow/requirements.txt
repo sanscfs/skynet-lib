@@ -10,3 +10,4 @@ skynet-retrieval>=2026.4.8
 skynet-consolidation>=2026.4.13
 skynet-vault>=2026.4.19
 skynet-providers>=2026.4.19
+skynet-vibe>=2026.4.20
