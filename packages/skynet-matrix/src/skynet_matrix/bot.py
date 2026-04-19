@@ -48,7 +48,7 @@ import html as html_lib
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Callable, Optional
 
 from skynet_matrix.commands import Command, HandlerCoro, parse_command_line
 from skynet_matrix.state_events import (
