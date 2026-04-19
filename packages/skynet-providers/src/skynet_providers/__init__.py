@@ -1,0 +1,41 @@
+"""Skynet LLM provider abstraction.
+
+Public surface:
+
+    from skynet_providers import (
+        chat_completion,
+        async_chat_completion,
+        resolve_api_key,
+        ProviderError,
+        ProviderAuthError,
+    )
+
+One module, one responsibility: take an OpenAI-compatible URL + model
+and return assistant text. Every consumer that used to hand-roll an
+`httpx.post("{url}/chat/completions", headers=..., json=...)` block
+now calls `chat_completion(...)` instead, and the provider-specific
+API key is resolved from Vault based on the URL.
+
+Why URL-based dispatch:
+  * callers only need to know which endpoint they want (Mistral direct
+    vs OpenRouter vs skynet-cache proxy), not which Vault path holds
+    the matching key
+  * a deploy-time config change (`LLM_API_URL=https://api.mistral.ai/v1`)
+    flips the downstream provider WITHOUT touching any code
+  * local Ollama ("100.64.0.4:11434") needs no auth and is handled
+    transparently — same call site works for cloud and on-box
+"""
+
+from __future__ import annotations
+
+from .chat import async_chat_completion, chat_completion
+from .exceptions import ProviderAuthError, ProviderError
+from .resolver import resolve_api_key
+
+__all__ = [
+    "chat_completion",
+    "async_chat_completion",
+    "resolve_api_key",
+    "ProviderError",
+    "ProviderAuthError",
+]
