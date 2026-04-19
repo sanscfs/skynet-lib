@@ -374,3 +374,104 @@ async def test_handler_none_is_silent():
     event = SimpleNamespace(sender="@user:test", body="!silent")
     await bot.handle_text_event(room, event)
     client.room_send.assert_not_awaited()
+
+
+# -- 13. post_message public helper -----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_message_plain_text_builds_escaped_html():
+    """Without an explicit ``html=``, the helper auto-formats the text
+    to HTML so clients that use ``formatted_body`` render consistently."""
+    bot, client = _make_bot()
+
+    resp = await bot.post_message("!room:test", "line1\nline2 & <x>")
+    assert resp is not None  # mock returns SimpleNamespace(event_id=...)
+
+    client.room_send.assert_awaited_once()
+    call = client.room_send.await_args
+    assert call.kwargs["room_id"] == "!room:test"
+    assert call.kwargs["message_type"] == "m.room.message"
+    content = call.kwargs["content"]
+    assert content["msgtype"] == "m.text"
+    assert content["body"] == "line1\nline2 & <x>"
+    assert content["format"] == "org.matrix.custom.html"
+    # Newlines -> <br/>, HTML-special chars escaped.
+    assert "<br/>" in content["formatted_body"]
+    assert "&amp;" in content["formatted_body"]
+    assert "&lt;x&gt;" in content["formatted_body"]
+
+
+@pytest.mark.asyncio
+async def test_post_message_explicit_html_passthrough():
+    bot, client = _make_bot()
+
+    await bot.post_message(
+        "!room:test",
+        "plain fallback",
+        html="<b>rich</b>",
+    )
+
+    content = client.room_send.await_args.kwargs["content"]
+    assert content["body"] == "plain fallback"
+    assert content["format"] == "org.matrix.custom.html"
+    assert content["formatted_body"] == "<b>rich</b>"
+
+
+@pytest.mark.asyncio
+async def test_post_message_thread_root_sets_relates_to():
+    bot, client = _make_bot()
+
+    await bot.post_message(
+        "!room:test",
+        "reply in thread",
+        thread_root="$root:event",
+    )
+
+    content = client.room_send.await_args.kwargs["content"]
+    assert content["m.relates_to"] == {
+        "rel_type": "m.thread",
+        "event_id": "$root:event",
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_message_swallows_send_errors():
+    """Background callsites must not crash if the homeserver hiccups."""
+    bot, client = _make_bot()
+    client.room_send.side_effect = RuntimeError("server went away")
+
+    # Must not raise.
+    resp = await bot.post_message("!room:test", "anything")
+    assert resp is None
+
+
+# -- 14. react public helper ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_react_builds_correct_annotation_payload():
+    bot, client = _make_bot()
+
+    resp = await bot.react("!room:test", "$target:event", "\U0001F44D")
+    assert resp is not None
+
+    client.room_send.assert_awaited_once()
+    call = client.room_send.await_args
+    assert call.kwargs["room_id"] == "!room:test"
+    assert call.kwargs["message_type"] == "m.reaction"
+    content = call.kwargs["content"]
+    assert content["m.relates_to"] == {
+        "rel_type": "m.annotation",
+        "event_id": "$target:event",
+        "key": "\U0001F44D",
+    }
+
+
+@pytest.mark.asyncio
+async def test_react_swallows_send_errors():
+    bot, client = _make_bot()
+    client.room_send.side_effect = RuntimeError("boom")
+
+    resp = await bot.react("!room:test", "$e:1", "\u2705")
+    assert resp is None
