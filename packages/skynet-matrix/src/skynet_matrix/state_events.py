@@ -100,6 +100,21 @@ async def publish_bot_commands_state(
     if hasattr(resp, "event_id"):
         return True
 
+    # 403 M_FORBIDDEN is the common case: bot joined the room at
+    # default power level (0) but state events require PL 50 by default.
+    # The CommandBot works fine without the state event — it only
+    # affects MSC4391 autocomplete in clients that support it (gomuks).
+    # Log once at INFO so operators know to promote the bot if they
+    # care about autocomplete, but don't spam WARN on every sync.
+    status = getattr(getattr(resp, "transport_response", None), "status", None)
+    if status == 403 or getattr(resp, "status_code", None) == "M_FORBIDDEN":
+        logger.info(
+            "publish_bot_commands_state: room=%s 403 — bot needs PL>=50 "
+            "to advertise commands via MSC4391; commands still work in-chat",
+            room_id,
+        )
+        return False
+
     logger.warning(
         "publish_bot_commands_state: room=%s unexpected response=%r",
         room_id,
