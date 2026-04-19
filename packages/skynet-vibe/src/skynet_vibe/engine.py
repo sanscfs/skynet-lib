@@ -151,9 +151,7 @@ class VibeEngine:
         top_k: int,
         noise_floor: float = 0.2,
     ) -> list[VibeSignal]:
-        return await self.store.search(
-            query_vector=query_vector, top_k=top_k, noise_floor=noise_floor
-        )
+        return await self.store.search(query_vector=query_vector, top_k=top_k, noise_floor=noise_floor)
 
     async def _weighted_target(
         self,
@@ -234,9 +232,7 @@ class VibeEngine:
         if not candidates:
             raise ValueError("suggest() requires at least one candidate")
 
-        target, pool = await self._weighted_target(
-            domain=domain, context_text=context_text, pool_size=128
-        )
+        target, pool = await self._weighted_target(domain=domain, context_text=context_text, pool_size=128)
         if not target:
             raise ValueError("cannot build target vector: no prototype centroid and no context_text")
 
@@ -345,13 +341,7 @@ class VibeEngine:
 
 
 def _candidate_label(cand: dict[str, Any]) -> str:
-    return str(
-        cand.get("title")
-        or cand.get("name")
-        or cand.get("id")
-        or cand.get("text", "")[:80]
-        or "candidate"
-    )
+    return str(cand.get("title") or cand.get("name") or cand.get("id") or cand.get("text", "")[:80] or "candidate")
 
 
 def _build_rerank_prompt(

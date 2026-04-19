@@ -8,9 +8,7 @@ from skynet_vibe import FacetVectors, Source, VibeSignal
 
 
 def test_vibe_signal_roundtrip() -> None:
-    vecs = FacetVectors(
-        content=[0.1, 0.2, 0.3], context=[0.4, 0.5, 0.6], user_state=None
-    )
+    vecs = FacetVectors(content=[0.1, 0.2, 0.3], context=[0.4, 0.5, 0.6], user_state=None)
     src = Source(type="chat", room_id="!room", agent_inferred=False)
     ts = datetime(2026, 4, 19, 12, 0, 0, tzinfo=timezone.utc)
     sig = VibeSignal(

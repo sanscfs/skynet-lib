@@ -48,8 +48,7 @@ async def describe_current_vibe(
     lines = []
     for signal, weight in top:
         lines.append(
-            f"- [w={weight:.2f} src={signal.source.type} conf={signal.confidence:.2f}] "
-            f"{signal.text_raw[:160]}"
+            f"- [w={weight:.2f} src={signal.source.type} conf={signal.confidence:.2f}] {signal.text_raw[:160]}"
         )
     domain_hint = f" in the '{domain}' domain" if domain else ""
     prompt = (
@@ -57,8 +56,7 @@ async def describe_current_vibe(
         "The following signals are listed from highest to lowest weight; weight already combines "
         "recency, source trust, and domain alignment. Produce ONE short paragraph (<= 3 sentences) "
         "describing the overall vibe direction -- mood, tempo, texture, what is pulling strongest. "
-        "No bullet points, no preamble.\n\n"
-        + "\n".join(lines)
+        "No bullet points, no preamble.\n\n" + "\n".join(lines)
     )
     return await _call_llm(llm, prompt)
 

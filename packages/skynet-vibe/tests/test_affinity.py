@@ -110,9 +110,7 @@ def test_signal_weight_negative_cosine_clipped() -> None:
         source=Source(type="chat"),
         timestamp=now,
     )
-    w = signal_weight(
-        sig, prototype_centroid=[-1.0, 0.0], context_vector=None, now=now
-    )
+    w = signal_weight(sig, prototype_centroid=[-1.0, 0.0], context_vector=None, now=now)
     # negative cosine is clipped to 0 -> overall weight 0
     assert w == 0.0
 

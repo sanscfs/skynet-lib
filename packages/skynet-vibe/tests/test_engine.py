@@ -121,9 +121,7 @@ async def test_suggest_returns_top_candidate(engine):
 @pytest.mark.asyncio
 async def test_suggest_requires_domain_or_context(engine):
     with pytest.raises(ValueError):
-        await engine.suggest(
-            candidates=[{"id": "x", "vector": [0.1] * 16}], domain=None, context_text=None
-        )
+        await engine.suggest(candidates=[{"id": "x", "vector": [0.1] * 16}], domain=None, context_text=None)
 
 
 @pytest.mark.asyncio
@@ -135,9 +133,7 @@ async def test_suggest_empty_candidates_raises(engine):
 @pytest.mark.asyncio
 async def test_explain_signal_returns_breakdown(engine):
     await engine.prototypes.add("music", ["albums tracks melodies"])
-    sig = await engine.absorb(
-        text="slow evening listening", source=Source(type="chat", room_id="!music")
-    )
+    sig = await engine.absorb(text="slow evening listening", source=Source(type="chat", room_id="!music"))
     breakdown = await engine.explain_signal(sig.id, domain="music", context_text="rain")
     # All components present
     for key in (

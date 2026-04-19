@@ -83,8 +83,8 @@ logger = logging.getLogger("extract_prototypes")
 # user's current voice rather than ancient history.
 
 LIVE_SOURCES: set[str] = {"skynet_chat", "claude_sessions", "matrix_dm", "matrix_chat"}
-HISTORICAL_CAP = 1000   # per-bucket cap for one-time historical dumps
-LIVE_FULL_UNTIL = 500   # below this, take the whole live bucket
+HISTORICAL_CAP = 1000  # per-bucket cap for one-time historical dumps
+LIVE_FULL_UNTIL = 500  # below this, take the whole live bucket
 
 
 def sample_per_bucket(buckets: dict[str, int]) -> dict[str, int]:
@@ -101,10 +101,10 @@ def sample_per_bucket(buckets: dict[str, int]) -> dict[str, int]:
             continue
         if source in LIVE_SOURCES:
             if count <= LIVE_FULL_UNTIL:
-                out[source] = count   # take the whole bucket
+                out[source] = count  # take the whole bucket
             else:
                 out[source] = LIVE_FULL_UNTIL + (count - LIVE_FULL_UNTIL) // 2
-        else:   # historical / dumps
+        else:  # historical / dumps
             out[source] = min(count, HISTORICAL_CAP)
     return out
 
@@ -221,6 +221,7 @@ def redact(text: str, counter: dict[str, int] | None = None) -> str:
     """Strip PII. ``counter`` (optional) accumulates per-kind hit counts."""
     out = text
     for kind, pat in _PII_PATTERNS.items():
+
         def _sub(m: re.Match[str], _k: str = kind) -> str:
             if counter is not None:
                 counter[_k] = counter.get(_k, 0) + 1
@@ -313,7 +314,11 @@ def sample_from_qdrant(
     with httpx.Client(timeout=60.0) as client:
         for src in sources:
             buckets_raw[src] = _scroll_all_for_source(
-                client, qdrant_url, collection, src, min_len=min_len,
+                client,
+                qdrant_url,
+                collection,
+                src,
+                min_len=min_len,
             )
             logger.info("scrolled source=%s -> %d messages", src, len(buckets_raw[src]))
 
@@ -336,9 +341,13 @@ def sample_from_qdrant(
             out.extend(pool)
             continue
         picked = recency_weighted_sample(
-            pool, allotted, half_life_days=half_life_days, seed=seed,
+            pool,
+            allotted,
+            half_life_days=half_life_days,
+            seed=seed,
         )
         out.extend(picked)
+
         # Spot-check log: compare median age of pool vs picked so we can
         # confirm the weighting nudged toward newer messages.
         def _median_age(items: list[dict[str, Any]]) -> float | None:
@@ -352,9 +361,14 @@ def sample_from_qdrant(
                 return None
             ages.sort()
             return ages[len(ages) // 2]
+
         logger.info(
             "recency-weighted %s: pool=%d median_age=%s days, picked=%d median_age=%s days",
-            src, len(pool), _median_age(pool), len(picked), _median_age(picked),
+            src,
+            len(pool),
+            _median_age(pool),
+            len(picked),
+            _median_age(picked),
         )
     return out, bucket_sizes, allotments
 
@@ -448,12 +462,16 @@ def _call_llm(
 
 _CLUSTER_PROMPT = """You are extracting DOMAIN PROTOTYPES from a user's chat corpus.
 
-Cluster the messages below into 2-5 coherent SPECIFIC domains. A domain is a stable area of interest — NOT a mood, NOT a single event.
+Cluster the messages below into 2-5 coherent SPECIFIC domains. A domain is
+a stable area of interest — NOT a mood, NOT a single event.
 
 For each domain emit:
 - "name": slug (kebab-case, 3-6 words, specific not generic)
 - "description": one-line English description of what the domain is about
-- "seed_phrases": 5-7 vivid phrases PULLED FROM THE MESSAGES (keep original language — Ukrainian/English/mixed is fine). Phrases must be concrete, not abstract. They will later be embedded as the domain centroid, so they must be representative of real user language.
+- "seed_phrases": 5-7 vivid phrases PULLED FROM THE MESSAGES (keep original
+  language — Ukrainian/English/mixed is fine). Phrases must be concrete, not
+  abstract. They will later be embedded as the domain centroid, so they must
+  be representative of real user language.
 
 Rules:
 - NEVER include personal names, emails, phones, API keys.
@@ -471,7 +489,9 @@ _MERGE_PROMPT = """You are consolidating domain proposals from multiple clusteri
 
 Input: a list of domain proposals, each with "name", "description", "seed_phrases".
 
-Merge overlapping domains. Keep specific over generic. Split only when distinct enough to warrant separate routing. Target: {target_min}-{target_max} final domains.
+Merge overlapping domains. Keep specific over generic. Split only when
+distinct enough to warrant separate routing. Target: {target_min}-{target_max}
+final domains.
 
 For each FINAL domain emit:
 - "name": kebab-case slug
@@ -584,11 +604,8 @@ def run_clustering(
         return [], len(chunks), parse_fails
 
     merge_input = json.dumps(proposals, ensure_ascii=False, indent=2)
-    merge_prompt = _MERGE_PROMPT.format(
-        target_min=target_min, target_max=target_max, proposals=merge_input
-    )
-    logger.info("merging %d proposals -> %d-%d final via %s",
-                len(proposals), target_min, target_max, backend)
+    merge_prompt = _MERGE_PROMPT.format(target_min=target_min, target_max=target_max, proposals=merge_input)
+    logger.info("merging %d proposals -> %d-%d final via %s", len(proposals), target_min, target_max, backend)
     try:
         raw = _call_llm(spec, merge_prompt, timeout=600.0)
     except Exception as e:
@@ -632,15 +649,21 @@ def extract_prototypes(
     if force_external:
         logger.info("EXTRACTION_USE_EXTERNAL=true -> using %s directly", external_fallback)
         proposals, _, _ = run_clustering(
-            sample, backend=external_fallback,
-            chunk_size=chunk_size, target_min=target_min, target_max=target_max,
+            sample,
+            backend=external_fallback,
+            chunk_size=chunk_size,
+            target_min=target_min,
+            target_max=target_max,
             pii_counter=pii_counter,
         )
         return proposals, external_fallback
 
     proposals, n_chunks, parse_fails = run_clustering(
-        sample, backend=primary_backend,
-        chunk_size=chunk_size, target_min=target_min, target_max=target_max,
+        sample,
+        backend=primary_backend,
+        chunk_size=chunk_size,
+        target_min=target_min,
+        target_max=target_max,
         pii_counter=pii_counter,
     )
     failure_rate = parse_fails / max(n_chunks, 1)
@@ -648,13 +671,18 @@ def extract_prototypes(
 
     if failure_rate > max_parse_failure_rate or too_few:
         logger.warning(
-            "primary %s failed quality gate (parse_fail_rate=%.2f domains=%d); "
-            "falling back to %s",
-            primary_backend, failure_rate, len(proposals), external_fallback,
+            "primary %s failed quality gate (parse_fail_rate=%.2f domains=%d); falling back to %s",
+            primary_backend,
+            failure_rate,
+            len(proposals),
+            external_fallback,
         )
         proposals, _, _ = run_clustering(
-            sample, backend=external_fallback,
-            chunk_size=chunk_size, target_min=target_min, target_max=target_max,
+            sample,
+            backend=external_fallback,
+            chunk_size=chunk_size,
+            target_min=target_min,
+            target_max=target_max,
             pii_counter=pii_counter,
         )
         return proposals, external_fallback
@@ -743,14 +771,17 @@ def _parse_quotas(spec: str) -> dict[str, int]:
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL") or
-                    f"http://{os.environ.get('QDRANT_HOST', 'qdrant.qdrant.svc')}:{os.environ.get('QDRANT_PORT', '6333')}")
+    _default_qdrant = os.environ.get("QDRANT_URL") or (
+        f"http://{os.environ.get('QDRANT_HOST', 'qdrant.qdrant.svc')}:{os.environ.get('QDRANT_PORT', '6333')}"
+    )
+    ap.add_argument("--qdrant-url", default=_default_qdrant)
     group = ap.add_mutually_exclusive_group(required=True)
-    group.add_argument("--sources",
-                       help="comma list of source values; per-bucket counts auto-calibrated "
-                            "(e.g. skynet_chat,claude_sessions,google_takeout_gemini)")
-    group.add_argument("--source",
-                       help="comma list source:quota (explicit per-source caps; bypasses auto-calibration)")
+    group.add_argument(
+        "--sources",
+        help="comma list of source values; per-bucket counts auto-calibrated "
+        "(e.g. skynet_chat,claude_sessions,google_takeout_gemini)",
+    )
+    group.add_argument("--source", help="comma list source:quota (explicit per-source caps; bypasses auto-calibration)")
     ap.add_argument("--backend", default="ollama_gemma4", choices=list(BACKENDS))
     ap.add_argument("--fallback", default="openrouter_mistral_large", choices=list(BACKENDS))
     ap.add_argument("--target-min", type=int, default=15)
@@ -758,8 +789,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--chunk-size", type=int, default=150)
     ap.add_argument("--min-domains", type=int, default=8)
     ap.add_argument("--max-parse-failure-rate", type=float, default=0.3)
-    ap.add_argument("--half-life-days", type=float, default=90.0,
-                    help="recency weighting half-life for downsampled buckets")
+    ap.add_argument(
+        "--half-life-days", type=float, default=90.0, help="recency weighting half-life for downsampled buckets"
+    )
     ap.add_argument("--seed", type=int, default=42, help="random seed for recency sampling")
     ap.add_argument("--output", required=True, help="where to write the final YAML")
     ap.add_argument("--stats-output", default=None, help="optional JSON file with stats")
@@ -783,10 +815,11 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
         )
     logger.info("bucket_sizes=%s, allotments=%s", bucket_sizes, allotments)
-    logger.info("sampled %d messages (%s)",
-                len(sample),
-                ", ".join(f"{s}={sum(1 for m in sample if m['source']==s)}"
-                         for s in allotments))
+    logger.info(
+        "sampled %d messages (%s)",
+        len(sample),
+        ", ".join(f"{s}={sum(1 for m in sample if m['source'] == s)}" for s in allotments),
+    )
 
     pii_counter: dict[str, int] = {}
     proposals, used_backend = extract_prototypes(

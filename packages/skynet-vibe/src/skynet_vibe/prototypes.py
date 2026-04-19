@@ -182,9 +182,7 @@ class PrototypeRegistry:
 
         import yaml  # type: ignore[import-not-found]
 
-        raw = resources.files("skynet_vibe").joinpath("config/default_prototypes.yaml").read_text(
-            encoding="utf-8"
-        )
+        raw = resources.files("skynet_vibe").joinpath("config/default_prototypes.yaml").read_text(encoding="utf-8")
         data = yaml.safe_load(raw) or {}
         if not isinstance(data, dict):
             raise ValueError("default_prototypes.yaml must be a mapping of domain -> seed phrases")
@@ -205,5 +203,3 @@ class PrototypeRegistry:
         for name, payload in data.items():
             full_payload = payload if "name" in payload else {**payload, "name": name}
             self._prototypes[name] = DomainPrototype.from_dict(full_payload)
-
-
