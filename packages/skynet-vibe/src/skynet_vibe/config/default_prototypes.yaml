@@ -121,3 +121,37 @@ philosophy-of-excess-and-nonlinear-thinking:
   - "primary traces (from noumena) vs secondary traces (shadows of shadows) як мета-концепти"
   - "критичний аналіз марксистської теорії через гегелівську діалектику 'self-movement'"
   - "вертикаль завжди програє, бо це термодинамічно невигідна конструкція — горизонтальна мережа працює на природному балансі"
+
+# ---------------------------------------------------------------------------
+# Baseline domain prototypes for recommendation routing.
+#
+# These do NOT come from chat corpus — they are hand-seeded so domain-specific
+# bots (skynet-movies, skynet-music, future skynet-books) always have a base
+# prototype to filter against. The 14 chat-derived prototypes above enrich
+# the vocabulary; these ensure the bots can always route.
+#
+# A signal about Tarkovsky registers at high cosine to BOTH
+# `existential-cinema-and-temporal-aesthetics` AND `movies` — this is the
+# intended overlap (multi-domain via cosine).
+# ---------------------------------------------------------------------------
+
+movies:
+  - "films cinema directors cinematography screenplay actors"
+  - "visual language editing pacing tone atmosphere"
+  - "arthouse horror noir drama documentary"
+  - "narrative structure shot composition mise en scène"
+  - "watched rewatched theatre streaming letterboxd"
+
+music:
+  - "albums tracks artists listening melodies genres"
+  - "rhythm beat production mixing recording bass drums"
+  - "live performance concert playlist playback discography"
+  - "ambient electronic jazz classical rock experimental"
+  - "listened saved rediscovered looped headphones"
+
+books:
+  - "books reading authors novels essays poetry"
+  - "fiction nonfiction philosophy theory memoir"
+  - "pages prose voice narrative style"
+  - "translated originally published annotated"
+  - "read finished abandoned rereading bookmarked"
