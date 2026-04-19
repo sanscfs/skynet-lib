@@ -38,8 +38,7 @@ class ComposeClient(Protocol):
         anchor: Optional[str],
         archetype: Archetype,
         context: dict,
-    ) -> str:
-        ...
+    ) -> str: ...
 
 
 def _signals_blurb(signals: list[Signal], limit: int = 5) -> str:

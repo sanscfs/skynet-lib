@@ -31,8 +31,9 @@ class FakeRedis:
     def hgetall(self, key: str) -> dict[str, str]:
         return dict(self._hashes.get(key, {}))
 
-    def hset(self, key: str, field: str | None = None, value: Any = None, *,
-             mapping: dict[str, Any] | None = None) -> int:
+    def hset(
+        self, key: str, field: str | None = None, value: Any = None, *, mapping: dict[str, Any] | None = None
+    ) -> int:
         h = self._hashes.setdefault(key, {})
         added = 0
         if mapping:

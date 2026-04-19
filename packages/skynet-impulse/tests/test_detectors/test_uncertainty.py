@@ -57,7 +57,9 @@ async def test_low_entropy_skips():
 async def test_anchor_prefix_applied():
     cli = FakeClassifier([[0.5, 0.5]])
     det = UncertaintySamplingDetector(
-        cli, uncertainty_threshold=0.6, anchor_prefix="movies:title:",
+        cli,
+        uncertainty_threshold=0.6,
+        anchor_prefix="movies:title:",
     )
     sigs = await det.detect(X=[[0]], signal_ids=["Oppenheimer"])
     assert sigs[0].anchor == "movies:title:Oppenheimer"
@@ -74,7 +76,7 @@ async def test_misaligned_signal_ids_raises():
 @pytest.mark.asyncio
 async def test_multiclass_entropy():
     # Uniform 3-class -> entropy = log2(3) ~ 1.585 bits, max = 1.585 -> normalized=1.0.
-    cli = FakeClassifier([[1/3, 1/3, 1/3]])
+    cli = FakeClassifier([[1 / 3, 1 / 3, 1 / 3]])
     det = UncertaintySamplingDetector(cli, uncertainty_threshold=0.6)
     sigs = await det.detect(X=[[0]], signal_ids=["x"])
     assert sigs[0].payload["entropy_bits"] == pytest.approx(math.log(3) / math.log(2), abs=1e-3)

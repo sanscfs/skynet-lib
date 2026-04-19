@@ -39,17 +39,11 @@ class Drive:
         if not self.name:
             raise ValueError("Drive.name must be non-empty")
         if not 0.0 < self.decay_rate <= 1.0:
-            raise ValueError(
-                f"Drive.decay_rate must be in (0, 1]; got {self.decay_rate!r}"
-            )
+            raise ValueError(f"Drive.decay_rate must be in (0, 1]; got {self.decay_rate!r}")
         if self.growth_per_tick < 0:
-            raise ValueError(
-                f"Drive.growth_per_tick must be >= 0; got {self.growth_per_tick!r}"
-            )
+            raise ValueError(f"Drive.growth_per_tick must be >= 0; got {self.growth_per_tick!r}")
         if not 0.0 <= self.initial <= 1.0:
-            raise ValueError(
-                f"Drive.initial must be in [0, 1]; got {self.initial!r}"
-            )
+            raise ValueError(f"Drive.initial must be in [0, 1]; got {self.initial!r}")
 
 
 @dataclass(frozen=True)

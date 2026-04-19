@@ -51,9 +51,7 @@ def _signals_summary(signals: list[Signal], limit: int = 8) -> str:
     lines = []
     for s in signals[:limit]:
         payload = json.dumps(s.payload, ensure_ascii=False, default=str)[:150]
-        lines.append(
-            f"- {s.kind} (sal={s.salience:.2f}, src={s.source}, anchor={s.anchor or '-'}): {payload}"
-        )
+        lines.append(f"- {s.kind} (sal={s.salience:.2f}, src={s.source}, anchor={s.anchor or '-'}): {payload}")
     return "\n".join(lines)
 
 

@@ -86,8 +86,7 @@ class ArchetypeBandit:
             raise ValueError("ArchetypeBandit needs at least one archetype")
         # Seed independent Beta(α, β) for each archetype.
         self._counts: dict[str, _PosteriorCounts] = {
-            a.name: _PosteriorCounts(prior_alpha, prior_beta)
-            for a in self._archetypes
+            a.name: _PosteriorCounts(prior_alpha, prior_beta) for a in self._archetypes
         }
         self._by_name = {a.name: a for a in self._archetypes}
         self._prior_alpha = prior_alpha
@@ -102,10 +101,7 @@ class ArchetypeBandit:
         """Archetypes matching ``trigger_kind`` (or any "*" catch-alls)."""
         if trigger_kind is None:
             return list(self._archetypes)
-        return [
-            a for a in self._archetypes
-            if a.trigger_kind == trigger_kind or a.trigger_kind == "*"
-        ]
+        return [a for a in self._archetypes if a.trigger_kind == trigger_kind or a.trigger_kind == "*"]
 
     def sample(
         self,
@@ -175,10 +171,7 @@ class ArchetypeBandit:
 
     @classmethod
     def restore(cls, state: dict, *, rng: random.Random | None = None) -> "ArchetypeBandit":
-        archetypes = [
-            Archetype(a["trigger_kind"], a["tone"], a["length"])
-            for a in state.get("archetypes", [])
-        ]
+        archetypes = [Archetype(a["trigger_kind"], a["tone"], a["length"]) for a in state.get("archetypes", [])]
         bandit = cls(
             archetypes,
             prior_alpha=state.get("prior_alpha", 1.0),
@@ -208,12 +201,7 @@ def default_archetypes(
     Research doc warns that 90 is too many at ~3 msg/day so we keep "long"
     out of the default set.
     """
-    return [
-        Archetype(trigger, tone, length)
-        for trigger in trigger_kinds
-        for tone in tones
-        for length in lengths
-    ]
+    return [Archetype(trigger, tone, length) for trigger in trigger_kinds for tone in tones for length in lengths]
 
 
 __all__ = ["Archetype", "ArchetypeBandit", "default_archetypes"]

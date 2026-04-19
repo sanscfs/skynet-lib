@@ -89,6 +89,7 @@ def _make_engine(
 def ArchetypeBandit_fixed():
     """Deterministic bandit whose .sample always returns a fixed archetype."""
     from skynet_impulse.archetypes import ArchetypeBandit
+
     return ArchetypeBandit(default_archetypes(), rng=random.Random(0))
 
 

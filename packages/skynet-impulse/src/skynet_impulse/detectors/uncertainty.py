@@ -115,13 +115,9 @@ class UncertaintySamplingDetector:
         """
         probas = np.asarray(self._classifier.predict_proba(X), dtype=float)
         if probas.ndim != 2:
-            raise ValueError(
-                f"classifier.predict_proba must return 2-D; got shape {probas.shape}"
-            )
+            raise ValueError(f"classifier.predict_proba must return 2-D; got shape {probas.shape}")
         if probas.shape[0] != len(signal_ids):
-            raise ValueError(
-                f"signal_ids length {len(signal_ids)} != predict_proba rows {probas.shape[0]}"
-            )
+            raise ValueError(f"signal_ids length {len(signal_ids)} != predict_proba rows {probas.shape[0]}")
         n_classes = probas.shape[1]
         max_h = _max_entropy(n_classes)
         if max_h == 0.0:

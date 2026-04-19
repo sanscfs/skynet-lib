@@ -40,6 +40,7 @@ def _poisson_cdf_tail(k: int, lam: float) -> float:
         return 1.0
     try:
         from scipy import stats  # type: ignore[import-not-found]
+
         # sf(k-1) = P(X >= k)
         return float(stats.poisson.sf(k - 1, lam))
     except ImportError:
@@ -99,8 +100,7 @@ class PoissonRepeatDetector:
                 from scipy import stats  # noqa: F401
             except ImportError as e:
                 raise OptionalDependencyError(
-                    "PoissonRepeatDetector(require_scipy=True) needs scipy; "
-                    "install 'skynet-impulse[scipy]'."
+                    "PoissonRepeatDetector(require_scipy=True) needs scipy; install 'skynet-impulse[scipy]'."
                 ) from e
 
     @property

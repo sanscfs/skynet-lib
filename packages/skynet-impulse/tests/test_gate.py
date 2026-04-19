@@ -59,11 +59,13 @@ def test_format_gate_voice_hint_inserted():
 @pytest.mark.asyncio
 async def test_gate_protocol_can_be_mocked():
     """Ensure any object with the right shape passes as a GateClient."""
+
     class MockGate:
         async def should_fire(self, **kw):
             return True, "because tests"
 
     from skynet_impulse.gate import GateClient
+
     gate: GateClient = MockGate()  # Protocol satisfaction checked by structural typing
     fire, reason = await gate.should_fire(
         domain="x",

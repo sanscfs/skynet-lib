@@ -113,9 +113,7 @@ class EngineConfig:
         if not self.drives:
             raise ConfigError("EngineConfig.drives must contain at least one Drive")
         if not 0.0 <= self.epsilon_greedy <= 1.0:
-            raise ConfigError(
-                f"epsilon_greedy must be in [0, 1]; got {self.epsilon_greedy!r}"
-            )
+            raise ConfigError(f"epsilon_greedy must be in [0, 1]; got {self.epsilon_greedy!r}")
         if self.rate_limit_per_day < 0:
             raise ConfigError("rate_limit_per_day must be >= 0")
 
@@ -260,8 +258,7 @@ class ImpulseEngine:
             try:
                 self._redis.set(self._cfg.last_signal_key, int(now.timestamp()))
             except Exception as e:  # noqa: BLE001
-                log.debug("impulse[%s] last_signal_ts persist failed: %s",
-                          self._cfg.domain, e)
+                log.debug("impulse[%s] last_signal_ts persist failed: %s", self._cfg.domain, e)
 
         # Dominant is computed over ALL drives so skip-reason distinguishes
         # "no drive active" from "only an excluded drive is active"; the
@@ -434,8 +431,7 @@ class ImpulseEngine:
         if dominant_value < baseline_p75:
             if self._rng.random() < cfg.epsilon_greedy:
                 # Fire anyway; skip returns None so the gate still runs.
-                log.debug("impulse[%s] epsilon-greedy override below baseline",
-                          cfg.domain)
+                log.debug("impulse[%s] epsilon-greedy override below baseline", cfg.domain)
                 return None
             return "below_threshold"
 

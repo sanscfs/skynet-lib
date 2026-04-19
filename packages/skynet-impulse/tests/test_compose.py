@@ -89,17 +89,22 @@ async def test_default_compose_client_success_path():
     class GoodClient:
         def __init__(self):
             self.last_call = None
+
         class _CompProxy:
             def __init__(self, owner):
                 self._owner = owner
+
             def create(self, **kwargs):
                 self._owner.last_call = kwargs
                 return Resp()
+
         @property
         def chat(self):
             outer = self
+
             class _Chat:
                 completions = outer._CompProxy(outer)
+
             return _Chat()
 
     good = GoodClient()
