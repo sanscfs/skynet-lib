@@ -42,7 +42,17 @@ class _AsyncQdrantLike(Protocol):
 
 
 def _payload_from_signal(signal: VibeSignal, sub_category: str) -> dict[str, Any]:
-    return {
+    extra = dict(signal.extra_payload)
+    # Root-level decay-relevant fields. They're promoted out of
+    # extra_payload so Qdrant payload indexes (if any) and the shared
+    # skynet_scoring.compute_decay_factor_logical(payload) helper can
+    # find them without nesting lookups. The mirror in _signal_from_point
+    # lifts them back into extra_payload so VibeSignal round-trips.
+    missed = int(extra.pop("missed_opportunities", 0) or 0)
+    memory_class = extra.pop("memory_class", "episodic")
+    salience = extra.pop("salience", None)
+    compression_level = extra.pop("compression_level", None)
+    payload: dict[str, Any] = {
         "category": sub_category,
         "text_raw": signal.text_raw,
         "source": signal.source.to_dict(),
@@ -51,8 +61,15 @@ def _payload_from_signal(signal: VibeSignal, sub_category: str) -> dict[str, Any
         "linked_rec_id": signal.linked_rec_id,
         "vector_context": list(signal.vectors.context) if signal.vectors.context is not None else None,
         "vector_user_state": list(signal.vectors.user_state) if signal.vectors.user_state is not None else None,
-        "extra_payload": dict(signal.extra_payload),
+        "extra_payload": extra,
+        "missed_opportunities": max(0, missed),
+        "memory_class": memory_class,
     }
+    if salience is not None:
+        payload["salience"] = float(salience)
+    if compression_level is not None:
+        payload["compression_level"] = int(compression_level)
+    return payload
 
 
 def _signal_from_point(point: dict[str, Any]) -> VibeSignal:
@@ -76,6 +93,19 @@ def _signal_from_point(point: dict[str, Any]) -> VibeSignal:
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
     source_raw = payload.get("source") or {"type": "implicit"}
+    # Lift root-level decay-relevant fields back into extra_payload so
+    # callers (engine, explain) can feed them directly into
+    # skynet_scoring.compute_decay_factor_logical(payload_like_dict)
+    # without another Qdrant round-trip. Mirror of _payload_from_signal.
+    extra = dict(payload.get("extra_payload", {}))
+    if "missed_opportunities" in payload:
+        extra["missed_opportunities"] = int(payload.get("missed_opportunities") or 0)
+    if "memory_class" in payload:
+        extra["memory_class"] = payload.get("memory_class")
+    if "salience" in payload:
+        extra["salience"] = payload.get("salience")
+    if "compression_level" in payload:
+        extra["compression_level"] = payload.get("compression_level")
     return VibeSignal(
         id=str(point.get("id")),
         text_raw=payload.get("text_raw", ""),
@@ -84,7 +114,7 @@ def _signal_from_point(point: dict[str, Any]) -> VibeSignal:
         timestamp=ts,
         confidence=float(payload.get("confidence", 1.0)),
         linked_rec_id=payload.get("linked_rec_id"),
-        extra_payload=dict(payload.get("extra_payload", {})),
+        extra_payload=extra,
     )
 
 
@@ -180,6 +210,45 @@ class VibeStore:
                 # Skip malformed records rather than failing the whole retrieval.
                 continue
         return out
+
+    async def bulk_increment_missed_opportunities(
+        self,
+        records: list[dict[str, Any]],
+        delta: int = 1,
+    ) -> None:
+        """Bump ``missed_opportunities`` on matched-but-unused signals.
+
+        Mirrors ``skynet_identity.modules.decay.bulk_update_missed_opportunities``.
+        Each record must carry ``id`` and a ``payload`` dict with the
+        current ``missed_opportunities`` value (typical shape: a search
+        hit from Qdrant). We group ids by the target value so one
+        ``set_payload`` call covers every id reaching the same counter --
+        usually shrinks O(N) writes to O(distinct-current-values).
+
+        Best-effort: swallows per-bucket exceptions. This is background
+        bookkeeping -- losing an increment is acceptable, surfacing an
+        exception on the hot recommendation path is not.
+        """
+        if not records:
+            return
+        by_new_value: dict[int, list[Any]] = {}
+        for r in records:
+            pid = r.get("id")
+            if pid is None:
+                continue
+            payload = r.get("payload") or {}
+            current = int(payload.get("missed_opportunities", 0) or 0)
+            new_value = max(0, current + int(delta))
+            by_new_value.setdefault(new_value, []).append(pid)
+        for new_value, ids in by_new_value.items():
+            try:
+                await self.qdrant.set_payload(
+                    self.collection,
+                    ids,
+                    {"missed_opportunities": new_value},
+                )
+            except Exception:
+                continue
 
     async def patch_vectors(self, signal_id: str, vectors: FacetVectors) -> None:
         """Update the facet vectors of an existing signal in-place.
