@@ -18,7 +18,7 @@ matches):
         "prefix": "!",
         "commands": [
           {"name": "list-watched-movies", "description": "...",
-           "args_hint": "[limit]", "emoji": "\ud83c\udfac"}
+           "args_hint": "[limit]", "emoji": "\U0001f3ac"}
         ]
       }
     }
