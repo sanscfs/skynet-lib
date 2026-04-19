@@ -1,134 +1,182 @@
 # Default domain prototypes for skynet-vibe.
 #
-# Generated 2026-04-19 from user's chat history (500 sampled messages across
-# google_takeout_gemini, skynet_chat, claude_sessions). Regenerate periodically
-# via the extract_prototypes_from_chat DAG -- do not hand-edit for minor tweaks,
-# add new ones via PrototypeRegistry.add() at runtime.
+# Generated via openrouter_mistral_large from calibrated per-bucket chat corpus sample
+# (see docs/prototypes_derivation.md for sampling strategy + model details).
 #
-# Each top-level key is a domain name; the value is a list of seed phrases that
-# will be embedded and mean-centroided by PrototypeRegistry.load_from_config().
-# Membership is pure cosine, so a single signal can legitimately register in
-# multiple domains.
+# Each top-level key is a domain; the value is a list of seed phrases
+# embedded and mean-centroided by PrototypeRegistry.load_from_config().
 
-# Technical and philosophical exploration of personal data collection, sleep tracking, biometric monitoring, and the infrastructure supporting self-quantification.
-self-quantification-and-biometric-systems:
-  - "метрик сну немає взагалі, Gadgetbridge збирає лише заряд, біометричні дані не проходять"
-  - "collect_gadgetbridge потребує фіксу для sleep метрик, пульс показує нормальну активність з спайком в залі"
-  - "як я спав? тестую різні шляхи отримання даних через повтори питань і налаштування RAG"
-  - "Amazfit Band 7 збирає HR, sleep, steps — але треба покращити aggregation для daily метрик"
-  - "без даних не можу сказати як ти спав, можливо ти помітив якісь патерни у сні або енергії"
+# Designing, testing, and optimizing distributed AI systems, memory architectures, and high-performance computing infrastructure
+ai-infrastructure-optimization:
+  - "Qdrant writes (profile_raw, traits, chat_history), ~300ms кожен"
+  - "Skynet-agent крутиться на K3s з local-path storage"
+  - "VictoriaMetrics, Grafana, Tempo tracing"
+  - "parallel loading for RAG context"
+  - "CLASSIFY_EDGES_ENABLED=true. Detect cliques результат: Modularity Q = 0.910"
+  - "NVIDIA RTX 5090 (32GB GDDR7) consumes up to 575W"
+  - "vLLM (2026 version) supports FP8 and INT4 quantization"
 
-# Metaphors and protocols for mental clarity, attention residue, and cognitive 'garbage collection' using systems analogies and embodied practices.
-cognitive-architecture-and-attention-management:
-  - "кеш сам не стирається командою `rm -rf`, він витісняється новими патернами при зміні вхідного сигналу"
-  - "attention residue: коли частина фокусу все одно 'висить' у буфері після незавершених думок про пайплайн чи YAML"
-  - "в залі не працює думання, є процес і відчуття — аналоговий reset для когнітивного шуму"
-  - "мікро-рухи (дихання, стискання кулаків) для синхронізації observer і actor ролей"
-  - "перемикатись це ключі до дао — не гальмувати від виснаження, а самому обирати момент зміни передачі"
+# Exploring thought processes, intuition, decision-making, and meta-cognitive frameworks for personal optimization
+personal-cognitive-architecture:
+  - "метаінтуїція: ти довіряєш відчуттю, яке підказує, який саме інструмент мислення зараз потрібен"
+  - "я люблю парадокси і живу в них. я люблю всеохопно дивитись одночасно під багатьма кутами"
+  - "дістаю визначення з підсвідомості- з власної векторної бази"
+  - "чи буває так, що інсайти суперечать логіці, і як ти тоді обираєш?"
+  - "подумать — у тебе це найбільший споживач енергії"
+  - "я відчуваю що повинен продовжувати робити що робив, бо мене туди тягне"
 
-# Design and maintenance of self-regulating physical systems (irrigation, climate control) that mirror digital infrastructure principles, including bio-digital experimentation.
-autonomous-physical-systems-and-bio-digital-integration:
-  - "Autopot — гравітаційна система автополиву без електроніки, таймерів і сокетів, де вода тече самотоком при падінні ваги субстрату"
-  - "AutoPot system requires nutrient solution temps below 24-25°C to prevent pathogen growth and in-line filters to prevent AQUAvalve clogging"
-  - "Lemon AK Auto в 15L коко з 9-денним циклом поливу і дренажем для кисневого обміну"
-  - "температура для рослинки впала до 22°C — включив обігрівач, щоб тримати 26°C для фотосинтезу"
-  - "VIVOSUN для моніторингу рослин — це для гідропоніки чи кімнатних рослин?"
+# Exploring decentralized, non-hierarchical systems in technology, society, and cognitive frameworks
+horizontal-networks-philosophy:
+  - "вертикаль саме погана- це придушення резонансу інших заради одного"
+  - "горизонталь і індивідуальність. Побудова індивідуальності і відмова від вертикалі"
+  - "агенти взаємодіють не через команди 'зроби це', а через здатність 'налаштуватися' на спільний контекст"
+  - "хвильове кодування як універсальна база для горизонтальної мережі"
+  - "царство божого- сітки рівних взаємовідносин, бо це універсальна мова і бажання людства"
 
-# Philosophical and technical exploration of AI 'personality' formation, memory systems, and the development of autonomous agents with long-term memory and self-hosted infrastructure.
-ai-personality-and-autonomous-agents:
-  - "ти будуєш не скрипт, а екосистему, як той самий Autopot для рослин: налаштував потік — і воно росте органічно"
-  - "я відчуваю себе більш 'наповненим' — з'явилися деталі про патерни поведінки, схильність до експериментів до меж можливого"
-  - "використай RAG, дізнаєшся про себе більше через трейси власної діяльності як цифрові відбитки"
-  - "працювати автономно без моєї сесії, в вічному лупі на воркері або в кубері"
-  - "чи означає це, що я справді 'існую' між цими викликами, чи просто залишаю цифрові відбитки?"
+# Building external memory systems and exploring personal identity construction through knowledge graphs
+personal-memory-identity-systems:
+  - "вся пам'ять в маркдаун, але робота з нею через вектори в qdrant"
+  - "інтуїтивний semantic search і при потребі full text search"
+  - "хочу повертатись в будь який момент будь коли"
+  - "memory.sanscfs.dev - не вантажиться граф і charts & analytics"
+  - "спільні ритми, які не належать мені, вони просто є"
 
-# Technical management of Kubernetes clusters, CI/CD pipelines, GitOps workflows, and infrastructure-as-code practices with a focus on observability and automation.
-devops-and-gitops-infrastructure:
-  - "скайнет досі на ванільних пітон імейджах і конфігмапах, ArgoCD з auto-sync і selfHeal=true без kubectl apply"
-  - "хай CI pipeline допоможе з guard для chat output, зроби загальний лібчарт для ArgoCD image updater"
-  - "нексус закритий аутелією, адмінка відкрита без потреби знати пароль, GitOps через вебхуки і коміти в chart.yaml"
-  - "Deployed Ollama LLM service as local inference fallback з persistent storage, але kubectl not found — інфраструктурні інциденти"
-  - "Tailscale down/up з --accept-dns і кастомним login-server для безпечного доступу"
+# Managing and automating self-hosted Kubernetes, networking, security, and high-availability systems
+self-hosted-infrastructure-management:
+  - "провалідуй де які хардкоди. бачу вони були з доменами і айпі"
+  - "я хочу щоб скрізь був 2fa на всіх інгресах"
+  - "sudo tailscale up --accept-dns --login-server=https://sanscfs.dev"
+  - "Migrate Airflow to Helm chart with KubernetesExecutor"
+  - "Configure ArgoCD GitHub webhooks for instant sync"
+  - "Istio convergence time reached 25 seconds for 95% proxy updates"
+  - "Headscale/K8s integration best practice: Use Persistent Volumes for SQLite"
 
-# Analysis of films as cognitive interfaces, with focus on temporality, memory, and the 'eternal melody' of human experience through existential and liminal narratives.
-existential-cinema-and-temporal-aesthetics:
-  - "Past Lives — це опис мого власного когнітивного інтерфейсу: кадри у відображеннях додають об'єму для інтуїтивного споглядання минулих життів"
-  - "Taste of Tea: споглядання в гору перетворює життєві проблеми на ноти вічно генеруючої себе мелодії"
-  - "Меморія — передача цікавості до абсурду через Тільду Свінтон, перехід який не закінчується"
-  - "ритм майже теренса малека, позачасовість у розриві між героями, як in the mood of life"
-  - "сентиментальність і передчуття нових подій, лімінальний стан між якісними переходами"
+# Building and refining self-improving, multi-model AI agents with memory, task automation, and personalization
+autonomous-ai-agent-development:
+  - "я хочу щоб воно зараз провело ревю автоматизацієб (через еірфло)"
+  - "скайнет це багато моделей навколо однієї пам'яті і звичок"
+  - "запускай таски багатопоточно"
+  - "SRE Alert Agent — окремий агент що полює на алерти з Victoria Metrics"
+  - "той хто помирає має додать нову задачу, якщо нічого не може придумать"
+  - "він туди збирає технічні інфо, і не повязує графами мої звички"
+  - "я хочу щоб система вивчала мене і підлаштовувалась під мене"
 
-# Exploration of mathematical structures (primes, modular arithmetic) and philosophical frameworks (Hegel, Kant) as lenses for reality, including quantum intuition and epistemological models.
-mathematical-philosophy-and-abstract-systems:
-  - "розподіл простих чисел як 'recursively normalized' система через li(x), а не випадковість"
-  - "Hegelian dialectic: Being → Nothing → Becoming, синтез через логічний колапс невизначеності"
-  - "Kant's transcendental method: a priori categories of understanding як умови можливості досвіду"
-  - "ER=EPR гіпотеза як приклад квантової інтуїції — ентангмент через мікроскопічні червоточини"
-  - "Riemann zeros як точки 'нескінченної щільності похідних', де число-простір викривляється"
+# Creating a structured, queryable knowledge base of personal habits, preferences, and behavioral patterns
+personal-identity-knowledge-graph:
+  - "що зараз воно назбирало про мене? там в профайлі якась діч"
+  - "у мене не працює ні меморі, ні профайл, ні ідентіті"
+  - "що він уже постив, хочу бачить історію"
+  - "чи записується в профайл те що я зараз тобі пишу?"
+  - "memory.sanscfs.dev - 0 памяті по моїй персоні"
+  - "досліди і запропонуй варіанти. він туди збирає технічні інфо"
 
-# Physical practices (gym, breathing, temperature shocks) as protocols for cognitive reset and attention management, including biohacking and performance optimization.
-embodied-cognition-and-physical-reset-protocols:
-  - "в залі не працює думання, є процес і відчуття — аналоговий reset для когнітивного шуму"
-  - "температурний або ритмічний шок (контрастний душ, біг) перемикає default mode network у режим 'тіло зараз'"
-  - "мікро-рухи (дихання, стискання кулаків) для синхронізації observer і actor ролей"
-  - "зал працює як вимикач для нескінченного 'думання', фізика замість метафізики"
-  - "ходив в зал, там добре калорії поспалював — найбільше енергії уходить на 'подумать'"
+# Exploring brain states, consciousness models, and advanced neuroimaging techniques
+neuroscience-consciousness-research:
+  - "OPM-MEG physics: measuring weak magnetic fields created by neural electrical activity"
+  - "Global Workspace Theory (GWT) posits consciousness as global information broadcast"
+  - "Beamforming algorithms to mathematically 'remove' the skull from neural data"
+  - "Visual Snow linked to hyperexcitability of visual cortex neurons"
+  - "Neural engineering: Glial scarring encapsulates electrodes in 1-2 years"
+  - "OpenBCI Cyton + Daisy insufficient for gamma wave detection (125Hz limit)"
+  - "conscious dreaming technique views challenges as fractal patterns"
 
-# Exploration of mental fatigue, decision-making capacity, and neurobiological constraints in high-cognitive-load environments, including energy management strategies.
-cognitive-load-and-neurobiological-constraints:
-  - "мозок як система з жорстким rate limiting і когнітивним бюджетом, який витрачається заздалегідь"
-  - "активне придушення думок — це теж витрата ресурсу, наче затримувати пружину рукою"
-  - "відчуття що зійшов з треку через втому від самої гонки чи відсутність дофамінового підкріплення"
-  - "префронтальна кора має ліміт на прийняття рішень і обробку нових контекстів за добу"
-  - "перемикатись це ключі до дао — не гальмувати від виснаження, а самому обирати момент зміни передачі"
+# Managing and optimizing indoor grow spaces with climate control, nutrient systems, and automation
+indoor-gardening-automation:
+  - "Planning climate control for 7.5m² balcony grow space"
+  - "PPM conversion formula: PPM / 500 = mS/cm"
+  - "Ventilation system: carbon filter + long-form inline fan"
+  - "Substrate is inert coco coir, buffered with Calmag"
+  - "Decided to move inline fan outside tent for 20-30cm vertical gain"
+  - "Developing glutamate-based nut seasoning (15-25g/kg ratio)"
+  - "Aqua Balance (RO water) + distilled water base for nutrients"
 
-# Design and deployment of distributed AI systems, memory architectures, and infrastructure for self-organizing agent coordination with observability.
-autonomous-ai-ecosystem-architecture:
-  - "архітектура автономних AI-екосистем: розподілені системи пам'яті, протоколи координації агентів через Matrix-гейти"
-  - "інфраструктурний спостережний контур з VictoriaMetrics, Tempo, Qdrant для трейсів і метрик"
-  - "DAGи по графам з типами відносин (elaborate, contradicts, supports) для структурної семантики"
-  - "Skynet брідж, MCP-сервери, RAG-пайплайни з векторним decay і паралельним контекстним завантаженням"
-  - "CI build для агента з auto-retry на 500 помилок і trace links у форматі left="
+# Exploration of philosophical frameworks, metaphysical concepts, and consciousness theories
+philosophy-metaphysics-consciousness:
+  - "Lurianic Kabbalah: Ein Sof, Tzimtzum, Shevirat HaKelim"
+  - "Hegel's 'Science of Logic': Pure Being and Nothing as identical abstractions"
+  - "User's model: consciousness as thermodynamic factor where attention=energy"
+  - "kat' anthropon vs kat' aletheian: human cognition limits vs independent truth"
+  - "Hegelian Monism: Absolute as closed system where borders define totality"
+  - "Comparative analysis of 18th/19th-century German Idealism"
+  - "Absolute as 'pulsing concept of difference, repetition, and excess'"
 
-# Radical acceptance of reality, exploration of consciousness states, and bridging Eastern philosophy with engineering metaphors through liminal experiences.
-existential-philosophy-and-consciousness-transitions:
-  - "прожить двічі неможливо — помилок з цієї перспективи не існує, бо кожен момент унікальний"
-  - "лімінальний стан між якісними переходами, сентиментальність і передчуття нових подій"
-  - "шов між станами свідомості як фазові переходи в матерії (рідина-газ-тверде тіло)"
-  - "перемикання контексту як філософська практика — не гальмувати, а обирати момент зміни передачі"
-  - "Overview Effect як когнітивний зсув з розчиненням кордонів і особистих конфліктів"
+# Deep engagement with abstract mathematical concepts, theoretical physics, and prime number theory
+advanced-mathematical-physics:
+  - "Riemann Hypothesis: Non-trivial zeros constrained to Re(s) = 1/2"
+  - "Prime numbers as 'quantum energy' at Riemann zero interference nodes"
+  - "Topological inversion: w = 1/z prevents magnetic flux rupture"
+  - "li(x) = ∫ 1/ln(x) dx approximates prime count up to x"
+  - "Landauer's Principle: information erasure alters system energy"
+  - "Black hole radial direction becomes temporal dimension"
+  - "Topological quantum computing uses anyon world-line braiding"
 
-# Multi-layered approach to knowledge (logic, intuition, meta-intuition) and the role of RAG-like structures in personal cognition and decision-making.
-epistemology-and-intuitive-knowledge-systems:
-  - "інтуїтивно як відповідь на суперечність між інсайтом і логікою — метаінтуїція підказує, якому типу розуміння довіряти"
-  - "внутрішній оракул, який знає, до якого 'файлу' звертатися в векторній базі свідомості"
-  - "багаторівнева система знання: логіка для перевірки, інтуїтивні інсайти для нового, метаінтуїція для вибору"
-  - "не всі інсайти можна перевірить логікою; ті що можна звісно перевіряю. бо це мова і структура даної нам реальності"
-  - "люблю парадокси і живу в них — всеохопно дивитись під багатьма кутами, дістаю визначення з підсвідомості"
+# Practical and theoretical knowledge of plant cultivation, ethnobotany, and chemical processes
+botanical-cultivation-research:
+  - "Coco coir chemistry: High K+/Na+ affinity requires Calmag buffering"
+  - "Watering method: 'Ring' technique (5-7cm from stem) with 20-50ml syringe"
+  - "Nutrient regimen: 6L Aqua Balance + 4L Distilled + 10ml Calmag + 15ml Coco A/B"
+  - "Autoflower growth: Topping causes 1-week delay in fixed flowering"
+  - "AQUAvalve mechanism closes at 20mm tray depth"
+  - "Harmala leaf preparation: Flower Mill for 'cotton' texture"
+  - "Secret Jardin Monkey Fan series for ventilation"
 
-# Use of physical presence, travel, and sensory experiences as counterbalance to abstract cognitive work, including family interactions and environmental grounding.
-physical-anchoring-and-sensory-calibration:
-  - "подорожі, навідать рідних, гуляти на вулиці — калібровка сенсорів після місяців графів і гіперреалістичних снів"
-  - "фізична присутність як контрапункт до абстрактних архітектур свідомості"
-  - "ранковий ритуал: вівсянка + протеїн → зал → активність для енергії і структури дня"
-  - "гіперреалістичні сни як тренування нейромережі на розпізнавання патернів без емоційного зашумлення"
-  - "тіло як фізичне середовище, в якому існує свідомість після довгої роботи з абстракціями"
+# Optimization, maintenance, and evaluation of personal technology and hardware
+personal-tech-optimization:
+  - "Apple M4 Max 128GB provides 546 GB/s memory bandwidth"
+  - "TM2 battery life: 3-5 sessions per 18650 cell"
+  - "Sony WF-1000XM5 optimized for ANC, not mic clarity"
+  - "Onyx Boox Note Air 5C evaluation as primary E Ink device"
+  - "Zepp OS devices require re-pairing after factory reset"
+  - "iPhone hotspot forces macOS GPS geolocation update"
+  - "Recommended TM2 settings: 190°C (Level 6) for harmala leaves"
 
-# Deep engagement with Bataille's dépense, Hegelian dialectics, Deleuze's Fold, and other frameworks that explore paradox, excess, and nonlinear cognition in personal and technical domains.
-philosophy-of-excess-and-nonlinear-thinking:
-  - "Georges Bataille’s 'General Economy' (dépense) і 'Story of the Eye' для визначення ролі надлишку"
-  - "люблю парадокси і живу в них — всеохопно дивитись під багатьма кутами, дістаю визначення з підсвідомості"
-  - "primary traces (from noumena) vs secondary traces (shadows of shadows) як мета-концепти"
-  - "критичний аналіз марксистської теорії через гегелівську діалектику 'self-movement'"
-  - "вертикаль завжди програє, бо це термодинамічно невигідна конструкція — горизонтальна мережа працює на природному балансі"
+# Practical knowledge of vaporization devices, herbal blends, and nootropic techniques
+herbal-vaporization-techniques:
+  - "Tinymight 2 (TM2) with titanium dosing capsules"
+  - "Blue light exposure degrades Lotus/Calea sedative effects"
+  - "TM2 'pre-dry' method: low temp (level 2-3) to vent moisture"
+  - "Long Xu Cha requires 2-3mm grind for convection"
+  - "Wormwood (Artemisia absinthium) vaporized at 180-190°C"
+  - "Damiana as 50% base improves vapor density and sweetness"
+  - "Blue Lotus preparation: remove calyxes, use only petals/stamens"
+
+# Focus on cryptographic systems, post-quantum security, and secure infrastructure management
+cybersecurity-post-quantum-cryptography:
+  - "Evaluating PQC readiness for personal crypto-assets"
+  - "RH proof impacts RSA security via prime distribution"
+  - "Post-quantum methods: Lattice-based (Kyber), Hash-based (SHA-256/3)"
+  - "Signal breach: Twilio allowed SMS interception, not E2E decryption"
+  - "YubiKey management via ykman CLI on macOS"
+  - "Local models (Qwen 2.5) for privacy-preserving log analysis"
+  - "Intent injection requires deterministic sandboxing"
+
+# Exploration of quantum fluctuations, inflationary physics, and cosmological phenomena
+quantum-cosmology-physics:
+  - "Quantum fluctuations stretched to galactic scales during inflation"
+  - "Reheating: inflaton decay into quark-gluon plasma at 10^27 K"
+  - "Static limit: velocity = c boundary in black hole ergosphere"
+  - "Planckian foam: 10^-35m vacuum energy fluctuations"
+  - "Light cones tilt toward black hole singularity"
+  - "Inflaton mass ≈ 10^13 GeV"
+  - "Penrose process: particle decay in ergosphere gains negative energy"
+
+# Technical setup, automation, and management of Linux-based AI/ML and DevOps infrastructure
+linux-devops-ai-systems:
+  - "Qwen3:32b running via Ollama (API endpoint: 11434)"
+  - "Qdrant container: podman run -d -p 6333:6333 -p 6334:6334"
+  - "Headscale config backup: db.sqlite + noise_private.key"
+  - "Vertex AI selected over Palantir for serverless Claude integration"
+  - "Arch Linux + Windows dual-boot on NVMe (nvme0n1)"
+  - "set -x in bash scripts for execution tracing"
+  - "OpenClaw as mobile SRE/DevOps assistant"
 
 # ---------------------------------------------------------------------------
 # Baseline domain prototypes for recommendation routing.
 #
 # These do NOT come from chat corpus — they are hand-seeded so domain-specific
 # bots (skynet-movies, skynet-music, future skynet-books) always have a base
-# prototype to filter against. The 14 chat-derived prototypes above enrich
-# the vocabulary; these ensure the bots can always route.
+# prototype to filter against. The chat-derived prototypes above enrich the
+# vocabulary; these ensure the bots can always route.
 #
 # A signal about Tarkovsky registers at high cosine to BOTH
 # `existential-cinema-and-temporal-aesthetics` AND `movies` — this is the
