@@ -1,7 +1,14 @@
-"""Skynet Matrix -- Matrix client, stream events, and live streaming."""
+"""Skynet Matrix -- Matrix client, stream events, live streaming, command bot."""
 
 from skynet_matrix.async_client import AsyncMatrixClient
+from skynet_matrix.bot import BotConfig, CommandBot
 from skynet_matrix.client import MatrixClient
+from skynet_matrix.commands import Command, parse_command_line
+from skynet_matrix.state_events import (
+    STATE_EVENT_TYPE,
+    build_bot_commands_content,
+    publish_bot_commands_state,
+)
 from skynet_matrix.stream_events import (
     AGENT_MATRIX_GROUP,
     AGENT_STREAM_PREFIX,
@@ -24,6 +31,13 @@ from skynet_matrix.trace_footer import build_trace_meta, format_trace_footer
 __all__ = [
     "MatrixClient",
     "AsyncMatrixClient",
+    "CommandBot",
+    "BotConfig",
+    "Command",
+    "parse_command_line",
+    "publish_bot_commands_state",
+    "build_bot_commands_content",
+    "STATE_EVENT_TYPE",
     "format_trace_footer",
     "build_trace_meta",
     "EventType",
