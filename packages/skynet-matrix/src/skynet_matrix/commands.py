@@ -73,7 +73,7 @@ def parse_command_line(
     body = body.lstrip()
     if not body.startswith(prefix):
         return None
-    stripped = body[len(prefix):].strip()
+    stripped = body[len(prefix) :].strip()
     if not stripped:
         return None
 

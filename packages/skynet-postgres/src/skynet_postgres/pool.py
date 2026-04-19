@@ -316,16 +316,13 @@ class AsyncPool:
             try:
                 await self._rotate(failed_generation=gen)
             except Exception as exc:
-                raise CredentialsRotationFailed(
-                    f"failed to rotate Vault credentials: {exc}"
-                ) from exc
+                raise CredentialsRotationFailed(f"failed to rotate Vault credentials: {exc}") from exc
             pool = self._require_pool()
             try:
                 return await getattr(pool, method)(query, *args)
             except _AUTH_ERRORS as exc:
                 raise CredentialsRotationFailed(
-                    "postgres rejected freshly-rotated credentials -- "
-                    "check Vault DB role and network path"
+                    "postgres rejected freshly-rotated credentials -- check Vault DB role and network path"
                 ) from exc
 
     async def _run_executemany(self, query: str, args: list[Any]) -> None:
@@ -339,14 +336,11 @@ class AsyncPool:
             try:
                 await self._rotate(failed_generation=gen)
             except Exception as exc:
-                raise CredentialsRotationFailed(
-                    f"failed to rotate Vault credentials: {exc}"
-                ) from exc
+                raise CredentialsRotationFailed(f"failed to rotate Vault credentials: {exc}") from exc
             pool = self._require_pool()
             try:
                 await pool.executemany(query, args)
             except _AUTH_ERRORS as exc:
                 raise CredentialsRotationFailed(
-                    "postgres rejected freshly-rotated credentials -- "
-                    "check Vault DB role and network path"
+                    "postgres rejected freshly-rotated credentials -- check Vault DB role and network path"
                 ) from exc
