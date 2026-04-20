@@ -1825,7 +1825,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "skynet-providers"
-version = "2026.4.24"
+version = "2026.4.25"
 source = { editable = "packages/skynet-providers" }
 dependencies = [
     { name = "httpx" },
@@ -1872,7 +1872,7 @@ requires-dist = [{ name = "hvac", specifier = ">=2.0,<3.0" }]
 
 [[package]]
 name = "skynet-vibe"
-version = "2026.4.21"
+version = "2026.4.22"
 source = { editable = "packages/skynet-vibe" }
 dependencies = [
     { name = "numpy" },
