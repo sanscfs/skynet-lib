@@ -1,7 +1,7 @@
 [project]
 name = "skynet-providers"
-version = "2026.4.23"
-description = "Skynet LLM provider abstraction -- OpenAI-compatible chat_completion with URL-based Vault key dispatch (Mistral direct / OpenRouter / local Ollama)."
+version = "2026.4.24"
+description = "Skynet LLM provider abstraction -- OpenAI-compatible chat_completion with URL-based Vault key dispatch (Mistral direct / OpenRouter / local Ollama). Adds tier-based model selection (big/medium/small) with per-slot Redis overrides."
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.27",

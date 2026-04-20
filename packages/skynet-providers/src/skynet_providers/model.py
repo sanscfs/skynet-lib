@@ -1,0 +1,218 @@
+"""Tier-based model override for multi-slot, multi-component routing.
+
+Three-level model selection — each level is optional and narrows the
+previous one:
+
+    tier      quality intent:  "big" | "medium" | "small"
+    provider  LLM vendor:      "mistral" | "local" | "openrouter"
+    model     explicit slug:   "mistral-large-latest" | "gemma3:27b" | …
+
+Resolution order (first non-empty wins):
+    explicit model + provider
+    → tier → ConfigMap env (TIER_{TIER}_{PROVIDER}) → hardcoded default
+
+Redis key schema:
+    skynet:model:{component}:{slot}   e.g. skynet:model:agent:chat
+    Value: JSON-encoded ModelOverride
+
+Tier env vars (all readable from skynet-models ConfigMap):
+    TIER_BIG_MISTRAL, TIER_BIG_LOCAL, TIER_BIG_OPENROUTER
+    TIER_MEDIUM_MISTRAL, TIER_MEDIUM_LOCAL, TIER_MEDIUM_OPENROUTER
+    TIER_SMALL_MISTRAL, TIER_SMALL_LOCAL, TIER_SMALL_OPENROUTER
+    TIER_BIG_DEFAULT_PROVIDER, TIER_MEDIUM_DEFAULT_PROVIDER, TIER_SMALL_DEFAULT_PROVIDER
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from dataclasses import asdict, dataclass
+
+logger = logging.getLogger("skynet_providers.model")
+
+VALID_TIERS: frozenset[str] = frozenset({"big", "medium", "small"})
+
+_REDIS_KEY_PREFIX = "skynet:model"
+
+# Slots that cannot be changed via /model — require a migration process
+_IMMUTABLE_SLOTS: frozenset[str] = frozenset({"embed"})
+
+# Slots restricted to local-only provider
+_LOCAL_ONLY_SLOTS: frozenset[str] = frozenset({"hyde"})
+
+# Slots with a max tier cap (may not exceed this tier)
+_SLOT_MAX_TIER: dict[str, str] = {"rerank": "small"}
+
+_TIER_ORDER: list[str] = ["small", "medium", "big"]
+
+# Hardcoded defaults — overridden by TIER_* env vars from ConfigMap
+_TIER_DEFAULTS: dict[str, dict[str, str]] = {
+    "big": {
+        "default_provider": "mistral",
+        "mistral":     "mistral-large-latest",
+        "local":       "gemma3:27b",
+        "openrouter":  "mistralai/mistral-large-2512",
+    },
+    "medium": {
+        "default_provider": "mistral",
+        "mistral":     "mistral-medium-latest",
+        "local":       "qwen3:14b",
+        "openrouter":  "mistralai/mistral-medium-3",
+    },
+    "small": {
+        "default_provider": "local",
+        "mistral":     "mistral-nemo-2407",
+        "local":       "qwen3:1.7b",
+        "openrouter":  "mistralai/mistral-nemo",
+    },
+}
+
+
+@dataclass
+class ModelOverride:
+    tier: str | None = None
+    provider: str | None = None
+    model: str | None = None
+
+    def is_empty(self) -> bool:
+        return not any([self.tier, self.provider, self.model])
+
+    def to_json(self) -> str:
+        return json.dumps({k: v for k, v in asdict(self).items() if v is not None})
+
+    @classmethod
+    def from_json(cls, value: str) -> ModelOverride:
+        try:
+            return cls(**json.loads(value))
+        except Exception:
+            return cls()
+
+    def display(self) -> str:
+        """Human-readable string for Matrix responses."""
+        parts = []
+        if self.tier:
+            parts.append(f"tier=**{self.tier}**")
+        if self.provider:
+            parts.append(f"provider=**{self.provider}**")
+        if self.model:
+            parts.append(f"`{self.model}`")
+        return " / ".join(parts) if parts else "default"
+
+
+def _tier_env(tier: str, provider: str) -> str:
+    key = f"TIER_{tier.upper()}_{provider.upper()}"
+    return os.environ.get(key) or _TIER_DEFAULTS.get(tier, {}).get(provider, "")
+
+
+def _tier_default_provider(tier: str) -> str:
+    key = f"TIER_{tier.upper()}_DEFAULT_PROVIDER"
+    return os.environ.get(key) or _TIER_DEFAULTS.get(tier, {}).get("default_provider", "mistral")
+
+
+def resolve_model(
+    override: ModelOverride,
+    *,
+    fallback_provider: str = "mistral",
+    fallback_model: str = "",
+) -> tuple[str, str]:
+    """Return ``(provider, model)`` from an override.
+
+    Falls through to tier env vars, then hardcoded defaults, then
+    ``fallback_*`` args (which come from cfg.LLM_FALLBACK_URL / cfg.CHAT_MODEL).
+    """
+    if override.is_empty():
+        return (fallback_provider, fallback_model)
+
+    # Fully explicit — short-circuit
+    if override.model and override.provider:
+        return (override.provider, override.model)
+
+    provider = override.provider
+    if not provider and override.tier:
+        provider = _tier_default_provider(override.tier)
+    provider = provider or fallback_provider
+
+    model = override.model
+    if not model and override.tier:
+        model = _tier_env(override.tier, provider)
+    model = model or fallback_model
+
+    return (provider, model)
+
+
+def parse_model_args(args: str) -> ModelOverride:
+    """Parse the portion of a ``/model`` command after the optional target.
+
+    Accepted forms (tokens after target is stripped by the caller):
+        big                            tier only
+        big mistral                    tier + provider
+        big mistral mistral-large-2512 tier + provider + model
+        mistral mistral-large-latest   provider + model (no tier)
+        reset / default / (empty)      clear override
+    """
+    from .override import VALID_PROVIDERS  # avoid module-level circular
+
+    tokens = args.strip().split()
+    if not tokens or tokens[0].lower() in ("reset", "default"):
+        return ModelOverride()
+
+    first = tokens[0].lower()
+    if first in VALID_TIERS:
+        tier, rest = first, tokens[1:]
+    else:
+        tier, rest = None, tokens
+
+    provider = model = None
+    if rest:
+        if rest[0].lower() in VALID_PROVIDERS:
+            provider = rest[0].lower()
+            model = " ".join(rest[1:]) or None
+        else:
+            model = " ".join(rest)
+
+    return ModelOverride(tier=tier, provider=provider, model=model)
+
+
+def slot_allows_override(slot: str, override: ModelOverride) -> tuple[bool, str]:
+    """Return ``(allowed, reason_if_not)``."""
+    if slot in _IMMUTABLE_SLOTS:
+        return False, f"`{slot}` requires a migration — use `!embed-migrate` instead"
+    if slot in _LOCAL_ONLY_SLOTS:
+        if override.provider and override.provider != "local":
+            return False, f"`{slot}` is fixed to local (lightweight inference only)"
+        if override.tier and override.tier != "small":
+            return False, f"`{slot}` is fixed to local — tier is ignored"
+    if slot in _SLOT_MAX_TIER and override.tier:
+        max_t = _SLOT_MAX_TIER[slot]
+        if override.tier in _TIER_ORDER and max_t in _TIER_ORDER:
+            if _TIER_ORDER.index(override.tier) > _TIER_ORDER.index(max_t):
+                return False, f"`{slot}` is capped at **{max_t}**"
+    return True, ""
+
+
+def redis_key(component: str, slot: str) -> str:
+    return f"{_REDIS_KEY_PREFIX}:{component}:{slot}"
+
+
+def get_redis_override(redis, component: str, slot: str) -> ModelOverride | None:
+    """Read a ModelOverride from Redis. Returns None if not set."""
+    try:
+        raw = redis.get(redis_key(component, slot))
+        if not raw:
+            return None
+        value = raw.decode() if isinstance(raw, bytes) else raw
+        return ModelOverride.from_json(value)
+    except Exception as e:
+        logger.debug("Failed to read model override %s/%s: %s", component, slot, e)
+        return None
+
+
+def set_redis_override(redis, component: str, slot: str, override: ModelOverride) -> None:
+    try:
+        if override.is_empty():
+            redis.delete(redis_key(component, slot))
+        else:
+            redis.set(redis_key(component, slot), override.to_json())
+    except Exception as e:
+        logger.warning("Failed to persist model override %s/%s: %s", component, slot, e)

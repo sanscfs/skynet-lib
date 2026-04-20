@@ -30,6 +30,15 @@ from __future__ import annotations
 
 from .chat import async_chat_completion, chat_completion
 from .exceptions import ProviderAuthError, ProviderError
+from .model import (
+    ModelOverride,
+    VALID_TIERS,
+    get_redis_override,
+    parse_model_args,
+    resolve_model,
+    set_redis_override,
+    slot_allows_override,
+)
 from .override import VALID_PROVIDERS, Endpoint, parse_override, resolve_endpoint
 from .resolver import resolve_api_key
 
@@ -43,4 +52,11 @@ __all__ = [
     "VALID_PROVIDERS",
     "ProviderError",
     "ProviderAuthError",
+    "ModelOverride",
+    "VALID_TIERS",
+    "parse_model_args",
+    "resolve_model",
+    "slot_allows_override",
+    "get_redis_override",
+    "set_redis_override",
 ]
