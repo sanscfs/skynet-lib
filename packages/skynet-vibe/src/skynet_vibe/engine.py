@@ -364,6 +364,29 @@ class VibeEngine:
                 scored.append((sig, w))
         return await _describe_current_vibe(scored, self.llm, domain=domain, window_days=window_days)
 
+    async def vibe_pool_stats(
+        self,
+        *,
+        domain: str | None = None,
+        window_days: int = 14,
+    ) -> dict[str, Any]:
+        """Return vibe pool metadata for diagnostic endpoints.
+
+        Wraps :meth:`VibeStore.pool_stats` (which always applies the
+        ``category == sub_category`` filter) so ``/vibe/status`` can
+        report the live pool size without poking at the store's private
+        client. ``domain`` and ``window_days`` are currently passed
+        through as metadata only -- signal filtering by domain happens
+        at retrieval time via prototype cosine, not at the payload
+        layer, and decay is logical-time (not wall-clock) per project
+        convention. See ``feedback_decay_logical_time``.
+        """
+        stats = await self.store.pool_stats()
+        stats.setdefault("available", True)
+        stats["domain"] = domain
+        stats["window_days"] = window_days
+        return stats
+
     async def explain_signal(
         self,
         signal_id: str,

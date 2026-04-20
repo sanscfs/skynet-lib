@@ -89,3 +89,98 @@ async def test_patch_vectors(fake_qdrant) -> None:
 async def test_get_missing_returns_none(fake_qdrant) -> None:
     store = VibeStore(fake_qdrant)
     assert await store.get("does-not-exist") is None
+
+
+@pytest.mark.asyncio
+async def test_count_enforces_category_filter(fake_qdrant) -> None:
+    """count() must only see points with category == sub_category.
+
+    Regression test: /vibe/status was returning store_unavailable
+    because the fallback looked for a non-existent ``store.client``
+    attribute and never reached the count path. Guard both the count
+    semantics and the attribute name here.
+    """
+    store = VibeStore(fake_qdrant, collection="test_coll", sub_category="vibe_signal")
+    # Two vibe signals
+    await store.put(_make_signal())
+    await store.put(_make_signal())
+    # One non-vibe point that should NOT be counted
+    await fake_qdrant.upsert(
+        "test_coll",
+        [
+            {
+                "id": "legacy-pref",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "payload": {"category": "cinema_preferences", "text_raw": "no"},
+            }
+        ],
+    )
+    # The store attribute for the qdrant client is ``qdrant`` (not ``client``);
+    # this check is the attribute-name regression guard.
+    assert store.qdrant is fake_qdrant
+    assert await store.count() == 2
+
+
+@pytest.mark.asyncio
+async def test_pool_stats_backfilled_source_v2(fake_qdrant) -> None:
+    """pool_stats() should bucket by ``source_v2.type`` after backfill.
+
+    After the 2026-04-20 backfill every point in ``user_profile_raw``
+    carries ``source_v2`` with a structured type (chat/telemetry/dag/etc.).
+    Older points retain their legacy ``source`` dict too. pool_stats
+    prefers ``source_v2.type`` and falls back gracefully.
+    """
+    store = VibeStore(fake_qdrant, collection="test_coll")
+    # Two chat signals + one dag signal, mimicking post-backfill payload shape.
+    await fake_qdrant.upsert(
+        "test_coll",
+        [
+            {
+                "id": "chat-a",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "payload": {
+                    "category": "vibe_signal",
+                    "source": {"type": "chat"},
+                    "source_v2": {"type": "chat", "writer": "skynet-chat"},
+                    "signal_version": 2,
+                    "timestamp": "2026-04-19T12:00:00+00:00",
+                },
+            },
+            {
+                "id": "chat-b",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "payload": {
+                    "category": "vibe_signal",
+                    "source": {"type": "chat"},
+                    "source_v2": {"type": "chat"},
+                    "signal_version": 2,
+                    "timestamp": "2026-04-20T09:00:00+00:00",
+                },
+            },
+            {
+                "id": "dag-a",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "payload": {
+                    "category": "vibe_signal",
+                    "source": {"type": "dag"},
+                    "source_v2": {"type": "dag", "dag_id": "collect_git"},
+                    "signal_version": 2,
+                    "timestamp": "2026-04-01T00:00:00+00:00",
+                },
+            },
+            {
+                "id": "legacy-noise",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "payload": {
+                    "category": "cinema_preferences",
+                    "source": {"type": "movie_watch"},
+                },
+            },
+        ],
+    )
+    stats = await store.pool_stats()
+    assert stats["count"] == 3
+    assert stats["by_source"] == {"chat": 2, "dag": 1}
+    assert stats["oldest_ts"] == "2026-04-01T00:00:00+00:00"
+    assert stats["collection"] == "test_coll"
+    assert stats["category"] == "vibe_signal"
