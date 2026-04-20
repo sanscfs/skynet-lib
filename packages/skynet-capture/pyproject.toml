@@ -1,9 +1,11 @@
 [project]
 name = "skynet-capture"
-version = "2026.4.25"
+version = "2026.4.26"
 description = "Shared ingest library: LLM-backed consumption extraction + Postgres pool helpers used by skynet-profiler, skynet-music, skynet-movies to turn natural-language Matrix messages into structured PG/Qdrant rows."
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "httpx>=0.27",
+]
 
 [project.optional-dependencies]
 # Modules writing to Postgres need asyncpg. Keep it optional so the

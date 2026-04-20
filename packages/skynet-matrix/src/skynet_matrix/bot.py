@@ -58,6 +58,8 @@ from skynet_matrix.state_events import (
 )
 
 OnTextCallback = Callable[[Any, str], Awaitable[Optional[Any]]]
+# (event, thread_root_event_id, body) → reply or None
+OnThreadReplyCallback = Callable[[Any, str, str], Awaitable[Optional[Any]]]
 
 logger = logging.getLogger("skynet_matrix.bot")
 
@@ -125,6 +127,7 @@ class CommandBot:
         menu_message_body: Optional[str] = None,
         sync_timeout_ms: int = 30_000,
         on_text: Optional[OnTextCallback] = None,
+        on_thread_reply: Optional[OnThreadReplyCallback] = None,
         client: Optional[Any] = None,  # injected for tests
     ) -> None:
         self.config = BotConfig(
@@ -163,6 +166,7 @@ class CommandBot:
         # callback returns ``None`` to skip, or a ``str`` / ``dict`` in
         # the same shape a command handler returns.
         self._on_text: Optional[OnTextCallback] = on_text
+        self._on_thread_reply: Optional[OnThreadReplyCallback] = on_thread_reply
 
         self._register_builtin_commands()
 
@@ -215,6 +219,9 @@ class CommandBot:
 
     def get_command(self, name: str) -> Optional[Command]:
         return self._commands.get(name)
+
+    def set_on_thread_reply(self, handler: Optional[OnThreadReplyCallback]) -> None:
+        self._on_thread_reply = handler
 
     def set_on_text(self, handler: Optional[OnTextCallback]) -> None:
         """Install or replace the free-text handler after construction.
@@ -556,8 +563,26 @@ class CommandBot:
             self._mirror_in(event, room_id)
 
         body = getattr(event, "body", "") or ""
+
+        # Detect Matrix thread replies (m.relates_to rel_type=m.thread).
+        thread_root_id: Optional[str] = None
+        source = getattr(event, "source", None)
+        if isinstance(source, dict):
+            relates = source.get("content", {}).get("m.relates_to", {})
+            if isinstance(relates, dict) and relates.get("rel_type") == "m.thread":
+                thread_root_id = relates.get("event_id") or None
+
         parsed = parse_command_line(body, prefix=self.config.command_prefix)
         if parsed is None:
+            if thread_root_id and self._on_thread_reply is not None and room_id and body.strip():
+                try:
+                    result = await self._on_thread_reply(event, thread_root_id, body)
+                except Exception as exc:
+                    logger.exception("on_thread_reply handler raised: %s", exc)
+                    return
+                if result is not None:
+                    await self._send_result(room_id, result, thread_root=thread_root_id)
+                    return
             if self._on_text is not None and room_id and body.strip():
                 try:
                     result = await self._on_text(event, body)
@@ -709,19 +734,19 @@ class CommandBot:
             if span_ctx is not None:
                 span_ctx.__exit__(None, None, None)  # type: ignore[union-attr]
 
-    async def _send_result(self, room_id: str, result: Any) -> None:
+    async def _send_result(self, room_id: str, result: Any, *, thread_root: Optional[str] = None) -> Optional[str]:
+        """Send result to room. Returns sent event_id or None."""
         if result is None:
-            return
+            return None
         if isinstance(result, str):
-            await self._reply(room_id, result)
-            return
+            return await self._reply(room_id, result, thread_root=thread_root)
         if isinstance(result, dict):
             text = result.get("text") or ""
             html = result.get("html")
-            thread = bool(result.get("thread", False))
-            await self._reply(room_id, text, html=html, thread=thread)
-            return
+            tr = result.get("thread_root") or thread_root
+            return await self._reply(room_id, text, html=html, thread_root=tr)
         logger.warning("unknown handler return type: %r", type(result))
+        return None
 
     async def _reply(
         self,
@@ -729,24 +754,25 @@ class CommandBot:
         text: str,
         *,
         html: Optional[str] = None,
-        thread: bool = False,
-    ) -> None:
+        thread_root: Optional[str] = None,
+    ) -> Optional[str]:
+        """Send a message and return the sent event_id (or None on failure)."""
         assert self._client is not None
         content: dict[str, Any] = {
             "msgtype": "m.text",
             "body": text,
         }
         if html is None:
-            # Auto-format: escape HTML so plain text bodies render identically
-            # in clients that use formatted_body.
             content["format"] = "org.matrix.custom.html"
             content["formatted_body"] = html_lib.escape(text).replace("\n", "<br/>")
         else:
             content["format"] = "org.matrix.custom.html"
             content["formatted_body"] = html
-        # ``thread`` currently left unwired to avoid depending on a specific
-        # thread_root plumbing; callers who need threads should use the
-        # low-level httpx AsyncMatrixClient directly.
+        if thread_root:
+            content["m.relates_to"] = {
+                "rel_type": "m.thread",
+                "event_id": thread_root,
+            }
         try:
             resp = await self._client.room_send(
                 room_id=room_id,
@@ -755,12 +781,10 @@ class CommandBot:
             )
         except Exception as exc:
             logger.warning("room_send failed room=%s: %s", room_id, exc)
-            return
-        self._mirror_out(
-            room_id=room_id,
-            body=text,
-            event_id=getattr(resp, "event_id", "") or "",
-        )
+            return None
+        event_id = getattr(resp, "event_id", "") or ""
+        self._mirror_out(room_id=room_id, body=text, event_id=event_id)
+        return event_id or None
 
     # -- Built-in commands & menu -----------------------------------------
 

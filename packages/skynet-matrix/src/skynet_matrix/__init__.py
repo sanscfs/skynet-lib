@@ -1,7 +1,7 @@
 """Skynet Matrix -- Matrix client, stream events, live streaming, command bot."""
 
 from skynet_matrix.async_client import AsyncMatrixClient
-from skynet_matrix.bot import BotConfig, CommandBot
+from skynet_matrix.bot import BotConfig, CommandBot, OnTextCallback, OnThreadReplyCallback
 from skynet_matrix.chat_agent import ChatAgent, LLMCaller, ToolDispatch, ToolSchema
 from skynet_matrix.client import MatrixClient
 from skynet_matrix.commands import Command, parse_command_line
@@ -34,6 +34,8 @@ __all__ = [
     "MatrixClient",
     "AsyncMatrixClient",
     "CommandBot",
+    "OnTextCallback",
+    "OnThreadReplyCallback",
     "BotConfig",
     "ChatAgent",
     "LLMCaller",
