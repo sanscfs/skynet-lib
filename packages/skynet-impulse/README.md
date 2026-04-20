@@ -165,6 +165,110 @@ list of `Archetype`s for exotic domains.
   is responsible for delivery and for emitting `spoke` self-feedback.
 - Bandit state is held in memory; persist via `state()` / `restore()`.
 
+## Adaptive half-life calibration
+
+As of `2026.4.21` the per-anchor refractory is **self-calibrating**. The
+historical `EngineConfig.refractory_cap_ticks` magic number (default: 4
+signal events) is deprecated — setting it emits a `DeprecationWarning`
+and the value is ignored by the new cooldown path. The engine now
+learns an effective half-life per domain from observed anchor-repeat
+intervals on its signal stream.
+
+### How it works
+
+Every signal that arrives on the stream is fed through the calibrator:
+
+1. **Observe**: if the signal's anchor was seen before, compute
+   `gap = global_signal_count - last_seen[anchor]` (in signal events,
+   not wall-clock time — logical-time decay).
+2. **Update both EMAs, per observation**:
+   - `h_fast = 0.3 * gap + 0.7 * h_fast` (effective window ~10 obs)
+   - `h_slow = 0.05 * gap + 0.95 * h_slow` (effective window ~50 obs)
+3. **Blend** them by their disagreement ratio:
+   `weight_fast = min(|h_fast - h_slow| / max(h_slow, 1), 1)`
+   so when the two EMAs disagree (regime change) the blend tracks
+   `h_fast`, and when they agree (stable) the blend tracks `h_slow`.
+4. **Decay penalties** for every active anchor using
+   `factor = exp(-ln(2) / effective_half_life)`.
+5. **Gate**: if the candidate anchor's penalty is ≥ `0.1`
+   (`PENALTY_NOISE_FLOOR`) the engine skips the fire with
+   `skip_reason = "penalty:<value>"`.
+
+After a successful fire the anchor's penalty is set back to `1.0` and
+decays over the next `~effective_half_life × 3.32` signals back below
+the noise floor (one half-life halves the penalty; after ~3.3 half-
+lives it's at 0.1).
+
+### Persistence
+
+State lives in three Redis hashes, scoped per domain:
+
+| Key | Contents |
+|-----|----------|
+| `skynet:impulse:calibration:<domain>` | `h_fast`, `h_slow`, `global_signal_count`, `observations` |
+| `skynet:impulse:last_seen:<domain>`   | `anchor -> signal_count` for gap computation |
+| `skynet:impulse:penalties:<domain>`   | `anchor -> current penalty float` |
+
+Saves happen every `PERSIST_EVERY_N_SIGNALS = 10` events and after
+every fire, so a pod restart loses at most 10 signals worth of learning.
+Persistence failures are logged and swallowed — they never block
+signal processing.
+
+### Safety clamps
+
+The effective half-life is always clamped to
+`[HALF_LIFE_MIN, HALF_LIFE_MAX] = [5, 500]`, so even a pathological
+burst of gap=1 signals can't collapse the cooldown to zero, and a
+single corrupt observation of gap=10000 can't inflate it beyond 500.
+
+### Diagnostics
+
+`engine.state().half_life` returns:
+
+```python
+{
+    "h_fast": 27.5,
+    "h_slow": 42.1,
+    "effective": 35.8,
+    "disagreement": 0.346,
+    "observations": 184,
+    "global_signal_count": 1923,
+}
+```
+
+`engine.state().active_penalties` exposes the per-anchor penalty dict
+for diagnostic UIs.
+
+`engine.state().half_life_human()` returns a one-liner for
+`/vibe/status` and `!vibe-status`:
+
+```
+half-life: 36 signals (fast=28, slow=42, blend=35%)
+184 anchor-repeat observations accumulated
+```
+
+### Why no median, no batching?
+
+A single low-alpha EMA is already a smoothing filter — there is no
+additional value in layering a median on top. The two-speed design
+gives us outlier detection for free: a single extreme gap spikes
+`h_fast` briefly, `h_slow` barely moves, and the disagreement ratio
+warns the operator that the recent activity pattern shifted. After a
+handful of normal observations `h_fast` reconverges with `h_slow` and
+the transient clears. This behaviour is tested in
+`tests/test_calibration.py::test_single_outlier_transient_recovers`.
+
+### Tuning
+
+Don't. The constants
+(`HALF_LIFE_ALPHA_FAST`, `HALF_LIFE_ALPHA_SLOW`,
+`HALF_LIFE_MIN`, `HALF_LIFE_MAX`, `HALF_LIFE_PRIOR_FRACTION`,
+`PENALTY_NOISE_FLOOR`, `PENALTY_EVICTION_FLOOR`,
+`PERSIST_EVERY_N_SIGNALS`) are intentionally **not** exposed as env
+vars. They are well-grounded ML-convention values; if you feel the
+urge to knob them the right answer is almost always "gather more data
+and let the EMA adapt" rather than "tune the EMA".
+
 ## Wire contract
 
 `signals.py` re-exports from `skynet_core.impulses` -- do NOT fork the
