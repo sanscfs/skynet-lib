@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from skynet_vibe.affinity import SOURCE_TRUST, cosine, signal_weight
 from skynet_vibe.emoji import EMOJI_TO_PHRASE, embed_emoji
-from skynet_vibe.engine import MatchResult, SuggestResult, VibeEngine
+from skynet_vibe.engine import MatchResult, ProcessResult, RollingMean, SuggestResult, VibeEngine
 from skynet_vibe.exceptions import (
     EmbeddingError,
     PrototypeNotFoundError,
@@ -35,6 +35,8 @@ __all__ = [
     "VibeEngine",
     "SuggestResult",
     "MatchResult",
+    "ProcessResult",
+    "RollingMean",
     "cosine",
     "signal_weight",
     "SOURCE_TRUST",
@@ -51,4 +53,4 @@ __all__ = [
     "vibe_signal_filter",
 ]
 
-__version__ = "2026.4.21"
+__version__ = "2026.4.23"

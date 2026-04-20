@@ -31,6 +31,16 @@ from skynet_vibe.prototypes import PrototypeRegistry
 from skynet_vibe.signals import FacetVectors, Source, VibeSignal
 from skynet_vibe.store import VibeStore
 
+# Source types that bypass the novelty gate — intentional records about
+# specific works are always worth keeping regardless of similarity to
+# existing signals.
+_REVIEW_SOURCE_TYPES: frozenset[str] = frozenset({"music_review", "movie_review"})
+
+# novelty_weight below this → too close to an existing signal → skip.
+# Simple config value; not adaptive on purpose (feedback_gradient_weights_not_gates:
+# the *threshold* is a config knob, the *weight itself* is the adaptive metric).
+_MERGE_WEIGHT_THRESHOLD: float = 0.15
+
 
 def _decay_for(signal: VibeSignal, lambdas: dict[str, float] | None) -> float:
     """Compute logical-time decay for a VibeSignal from its extra_payload.
@@ -98,6 +108,65 @@ class SuggestResult:
 
 
 @dataclass
+class ProcessResult:
+    """Output of :meth:`VibeEngine.process` — novelty-gated signal capture.
+
+    ``stored`` is True iff the signal was upserted into Qdrant.
+    ``novelty_weight`` = novelty_score / rolling_mean: measures how unusual
+    this signal is relative to recent insertions. Values > 1.0 are more
+    novel than average; < 1.0 are more redundant. This IS the adaptive
+    metric — not a threshold (feedback_gradient_weights_not_gates).
+    ``nearest_score`` is the max cosine to any existing signal (0 on empty
+    collection, 1 on exact duplicate).
+    ``signal_id`` is populated iff ``stored=True``.
+    """
+
+    stored: bool
+    novelty_weight: float
+    nearest_score: float
+    source_type: str = "emotional"
+    signal_id: str | None = None
+
+
+class RollingMean:
+    """In-process rolling mean of recent novelty scores.
+
+    Provides the denominator for ``novelty_weight = novelty_score / mean``.
+    Returns ``cold_start_mean`` until at least ``min_samples`` entries
+    have been pushed — avoids division-by-near-zero on a fresh pod while
+    keeping the cold-start behaviour predictable (everything novel).
+
+    Single-replica pods can keep this in memory; the rolling window
+    naturally resets on pod restart which is safe — the collection itself
+    is the durable state.
+    """
+
+    def __init__(
+        self,
+        window: int = 200,
+        cold_start_mean: float = 0.5,
+        min_samples: int = 10,
+    ) -> None:
+        self._window = window
+        self._cold_start = cold_start_mean
+        self._min = min_samples
+        self._buf: list[float] = []
+
+    def push(self, value: float) -> None:
+        self._buf.append(float(value))
+        if len(self._buf) > self._window:
+            del self._buf[0]
+
+    def mean(self) -> float:
+        if len(self._buf) < self._min:
+            return self._cold_start
+        return sum(self._buf) / len(self._buf)
+
+    def __len__(self) -> int:
+        return len(self._buf)
+
+
+@dataclass
 class MatchResult:
     """Output of :meth:`VibeEngine.match` -- entropy-gated classification.
 
@@ -134,7 +203,7 @@ class VibeEngine:
     def __init__(
         self,
         store: VibeStore,
-        prototypes: PrototypeRegistry,
+        prototypes: PrototypeRegistry | None,
         embedder: Embedder,
         llm_client: LLMClient,
         context_alpha: float = 0.5,
@@ -207,6 +276,85 @@ class VibeEngine:
         return signal
 
     # ------------------------------------------------------------------
+    # Process (v3: novelty-gated, history-based)
+
+    async def process(
+        self,
+        *,
+        text: str,
+        source: Source,
+        source_type: str = "emotional",
+        rolling_mean: RollingMean | None = None,
+        extra_payload: dict | None = None,
+    ) -> ProcessResult:
+        """Embed text, assess novelty against existing signals, conditionally store.
+
+        Acceptance rule (feedback_gradient_weights_not_gates):
+        ``novelty_weight = novelty_score / rolling_mean`` measures novelty
+        relative to recent insertions, not against an absolute threshold.
+        Signals with ``novelty_weight >= _MERGE_WEIGHT_THRESHOLD`` are stored;
+        below it, they are too close to existing signals to add information.
+
+        Review signals (``music_review``, ``movie_review``) bypass the gate —
+        intentional records about specific works are always worth keeping.
+
+        All signals live in the same Qdrant collection and share the same
+        embedding space, so music reviews, movie reviews, and emotional signals
+        are all neighbours by semantic proximity. Relations emerge from Qdrant
+        nearest-neighbour search at query time — nothing is pre-stored.
+        """
+        if len(text.strip()) < 10:
+            return ProcessResult(
+                stored=False, novelty_weight=0.0, nearest_score=1.0, source_type=source_type,
+            )
+
+        vec = await _embed(self.embedder, text)
+
+        # True nearest-neighbour: no noise floor so we always get the closest
+        # existing signal even if similarity is low (empty collection → 0.0).
+        neighbors = await self.store.search(vec, top_k=3, noise_floor=0.0)
+        if neighbors:
+            nearest_score = max(cosine(vec, n.vectors.content) for n in neighbors)
+        else:
+            nearest_score = 0.0
+
+        novelty_score = 1.0 - nearest_score
+        mean = rolling_mean.mean() if rolling_mean is not None else 0.5
+        novelty_weight = novelty_score / mean if mean > 0.0 else novelty_score
+
+        should_store = (source_type in _REVIEW_SOURCE_TYPES) or (novelty_weight >= _MERGE_WEIGHT_THRESHOLD)
+
+        if not should_store:
+            return ProcessResult(
+                stored=False,
+                novelty_weight=float(novelty_weight),
+                nearest_score=float(nearest_score),
+                source_type=source_type,
+            )
+
+        extra = dict(extra_payload or {})
+        extra["novelty_weight"] = round(float(novelty_weight), 4)
+        extra["source_type"] = source_type
+
+        signal = await self.absorb(
+            text=text,
+            source=source,
+            confidence=min(1.0, max(0.0, float(novelty_weight))),
+            extra_payload=extra,
+        )
+
+        if rolling_mean is not None:
+            rolling_mean.push(novelty_score)
+
+        return ProcessResult(
+            stored=True,
+            novelty_weight=float(novelty_weight),
+            nearest_score=float(nearest_score),
+            source_type=source_type,
+            signal_id=signal.id,
+        )
+
+    # ------------------------------------------------------------------
     # Match (v2: entropy-gated classification)
 
     async def match(
@@ -237,6 +385,8 @@ class VibeEngine:
         :class:`EmbeddingError` if the embedder returns a bad vector or
         there are zero registered prototypes.
         """
+        if self.prototypes is None:
+            raise EmbeddingError("match() requires a PrototypeRegistry; use process() for the novelty-gated path")
         if not self.prototypes.ready:
             raise PrototypeWarmingUpError("prototype warmup in progress; match() not available yet")
 
