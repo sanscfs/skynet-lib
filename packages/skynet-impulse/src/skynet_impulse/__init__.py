@@ -46,6 +46,11 @@ from __future__ import annotations
 
 from .archetypes import Archetype, ArchetypeBandit, default_archetypes
 from .baseline import AdaptiveBaseline, BaselineConfig
+from .calibration import (
+    CalibrationPersistence,
+    CalibrationState,
+    HalfLifeCalibrator,
+)
 from .compose import (
     ComposeClient,
     DefaultOpenAIComposeClient,
@@ -75,7 +80,7 @@ from .signals import (
     ensure_consumer_group,
 )
 
-__version__ = "2026.4.20"
+__version__ = "2026.4.21"
 
 __all__ = [
     "__version__",

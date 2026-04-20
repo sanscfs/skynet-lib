@@ -1607,7 +1607,7 @@ source = { editable = "packages/skynet-consolidation" }
 
 [[package]]
 name = "skynet-core"
-version = "2026.4.4"
+version = "2026.4.5"
 source = { editable = "packages/skynet-core" }
 dependencies = [
     { name = "opentelemetry-api" },
@@ -1688,7 +1688,7 @@ provides-extras = ["louvain"]
 
 [[package]]
 name = "skynet-impulse"
-version = "2026.4.20"
+version = "2026.4.21"
 source = { editable = "packages/skynet-impulse" }
 dependencies = [
     { name = "numpy" },
