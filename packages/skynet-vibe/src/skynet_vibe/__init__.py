@@ -15,6 +15,7 @@ from skynet_vibe.engine import SuggestResult, VibeEngine
 from skynet_vibe.exceptions import (
     EmbeddingError,
     PrototypeNotFoundError,
+    PrototypeWarmingUpError,
     SignalNotFoundError,
     VibeError,
 )
@@ -41,8 +42,9 @@ __all__ = [
     "explain_signal",
     "VibeError",
     "PrototypeNotFoundError",
+    "PrototypeWarmingUpError",
     "SignalNotFoundError",
     "EmbeddingError",
 ]
 
-__version__ = "2026.4.20"
+__version__ = "2026.4.20.1"

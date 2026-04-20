@@ -24,11 +24,14 @@ initial 11 domains; callers can add/override at runtime via :meth:`add` and
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from skynet_vibe.exceptions import EmbeddingError, PrototypeNotFoundError
+
+logger = logging.getLogger(__name__)
 
 # Embedder protocol: accepts a string, returns a list[float] (sync or awaitable).
 Embedder = Callable[[str], Awaitable[list[float]] | list[float]]
@@ -107,6 +110,35 @@ class PrototypeRegistry:
     def __init__(self, embedder: Embedder):
         self._embedder: Embedder = embedder
         self._prototypes: dict[str, DomainPrototype] = {}
+        self._ready: asyncio.Event = asyncio.Event()
+        self._warmup_task: asyncio.Task[None] | None = None
+
+    # ------------------------------------------------------------------
+    # Warmup lifecycle
+
+    def start_warmup(self) -> None:
+        """Non-blocking. Schedules background prototype embedding. Idempotent."""
+        if self._warmup_task is None or self._warmup_task.done():
+            self._warmup_task = asyncio.create_task(self._warmup())
+
+    async def _warmup(self) -> None:
+        try:
+            await self._load_defaults_impl()
+            self._ready.set()
+        except Exception:
+            logger.exception("prototype warmup failed")
+            raise
+
+    @property
+    def ready(self) -> bool:
+        return self._ready.is_set()
+
+    async def wait_ready(self, timeout: float | None = None) -> bool:
+        try:
+            await asyncio.wait_for(self._ready.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
 
     async def _embed_phrases(self, phrases: list[str]) -> list[list[float]]:
         return [await _embed_one(self._embedder, p) for p in phrases]
@@ -172,7 +204,7 @@ class PrototypeRegistry:
         for name, seeds in config.items():
             await self.add(name, list(seeds))
 
-    async def load_defaults(self) -> None:
+    async def _load_defaults_impl(self) -> None:
         """Load the packaged ``config/default_prototypes.yaml`` bundle.
 
         Convenience wrapper so callers can bootstrap 11 common domains with
@@ -187,6 +219,16 @@ class PrototypeRegistry:
         if not isinstance(data, dict):
             raise ValueError("default_prototypes.yaml must be a mapping of domain -> seed phrases")
         await self.load_from_config({str(k): [str(x) for x in v] for k, v in data.items()})
+
+    async def load_defaults(self) -> None:
+        """Backwards-compat: start warmup + await its completion.
+
+        Prefer :meth:`start_warmup` + :meth:`wait_ready` (or checking
+        :attr:`ready`) in new code so service startup stays non-blocking.
+        """
+        self.start_warmup()
+        assert self._warmup_task is not None  # set by start_warmup
+        await self._warmup_task
 
     def remove(self, name: str) -> None:
         self._prototypes.pop(name, None)

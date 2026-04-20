@@ -17,3 +17,7 @@ class SignalNotFoundError(VibeError):
 
 class EmbeddingError(VibeError):
     """Raised when the injected embedder fails to return a usable vector."""
+
+
+class PrototypeWarmingUpError(VibeError):
+    """Prototypes still loading in background -- caller should fallback."""

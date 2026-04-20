@@ -79,6 +79,8 @@ async def test_suggest_returns_top_candidate(engine):
 
     # Register domain prototype with a fixed centroid.
     await engine.prototypes.add("music", ["albums tracks melodies"])
+    # Tests bypass the background warmup path; flip ready so suggest() proceeds.
+    engine.prototypes._ready.set()
     centroid = (await engine.prototypes.get("music")).centroid
 
     # Insert one signal whose content IS the centroid -> positive cosine with proto.
@@ -119,14 +121,29 @@ async def test_suggest_returns_top_candidate(engine):
 
 @pytest.mark.asyncio
 async def test_suggest_requires_domain_or_context(engine):
+    engine.prototypes._ready.set()
     with pytest.raises(ValueError):
         await engine.suggest(candidates=[{"id": "x", "vector": [0.1] * 16}], domain=None, context_text=None)
 
 
 @pytest.mark.asyncio
 async def test_suggest_empty_candidates_raises(engine):
+    engine.prototypes._ready.set()
     with pytest.raises(ValueError):
         await engine.suggest(candidates=[], domain="music", context_text="evening")
+
+
+@pytest.mark.asyncio
+async def test_suggest_raises_when_prototypes_not_ready(engine):
+    from skynet_vibe import PrototypeWarmingUpError
+
+    # Without setting _ready, suggest() must refuse.
+    with pytest.raises(PrototypeWarmingUpError):
+        await engine.suggest(
+            candidates=[{"id": "x", "vector": [0.1] * 16}],
+            domain="music",
+            context_text="evening",
+        )
 
 
 @pytest.mark.asyncio
