@@ -2,6 +2,7 @@
 
 from skynet_matrix.async_client import AsyncMatrixClient
 from skynet_matrix.bot import BotConfig, CommandBot
+from skynet_matrix.chat_agent import ChatAgent, LLMCaller, ToolDispatch, ToolSchema
 from skynet_matrix.client import MatrixClient
 from skynet_matrix.commands import Command, parse_command_line
 from skynet_matrix.state_events import (
@@ -34,6 +35,10 @@ __all__ = [
     "AsyncMatrixClient",
     "CommandBot",
     "BotConfig",
+    "ChatAgent",
+    "LLMCaller",
+    "ToolDispatch",
+    "ToolSchema",
     "Command",
     "parse_command_line",
     "publish_bot_commands_state",

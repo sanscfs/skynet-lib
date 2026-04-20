@@ -48,7 +48,9 @@ import html as html_lib
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
+
+OnTextCallback = Callable[[Any, str], Awaitable[Optional[Any]]]
 
 from skynet_matrix.chronicle_mirror import get_mirror_client, mirror_message
 from skynet_matrix.commands import Command, HandlerCoro, parse_command_line
@@ -122,6 +124,7 @@ class CommandBot:
         state_event_type: str = STATE_EVENT_TYPE,
         menu_message_body: Optional[str] = None,
         sync_timeout_ms: int = 30_000,
+        on_text: Optional[OnTextCallback] = None,
         client: Optional[Any] = None,  # injected for tests
     ) -> None:
         self.config = BotConfig(
@@ -153,6 +156,13 @@ class CommandBot:
         # calls become silent no-ops. See ``chronicle_mirror`` module
         # for the zero-LLM guarantee.
         self._chronicle_redis = get_mirror_client()
+
+        # Free-text handler. Invoked on any non-command inbound message so
+        # services (movies/music/...) can wire an LLM that routes the text
+        # to one of their registered tools. Silent-by-default: the
+        # callback returns ``None`` to skip, or a ``str`` / ``dict`` in
+        # the same shape a command handler returns.
+        self._on_text: Optional[OnTextCallback] = on_text
 
         self._register_builtin_commands()
 
@@ -205,6 +215,14 @@ class CommandBot:
 
     def get_command(self, name: str) -> Optional[Command]:
         return self._commands.get(name)
+
+    def set_on_text(self, handler: Optional[OnTextCallback]) -> None:
+        """Install or replace the free-text handler after construction.
+
+        Useful when the handler needs ``CommandBot``'s final command list
+        (built from registered modules) to compose its LLM tool schema.
+        """
+        self._on_text = handler
 
     async def run(self) -> None:
         """Log in, join rooms, publish state, sync forever."""
@@ -540,6 +558,14 @@ class CommandBot:
         body = getattr(event, "body", "") or ""
         parsed = parse_command_line(body, prefix=self.config.command_prefix)
         if parsed is None:
+            if self._on_text is not None and room_id and body.strip():
+                try:
+                    result = await self._on_text(event, body)
+                except Exception as exc:
+                    logger.exception("on_text handler raised: %s", exc)
+                    return
+                if result is not None:
+                    await self._send_result(room_id, result)
             return
 
         cmd_name, args = parsed
