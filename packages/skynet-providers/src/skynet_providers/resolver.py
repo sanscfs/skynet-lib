@@ -8,9 +8,17 @@ downstream key without an extra config knob.
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
+import threading
 
 logger = logging.getLogger("skynet_providers.resolver")
+
+# Process-local cache of successful Vault reads. We explicitly do NOT
+# cache empty/missing results — a pod that started before its Vault
+# policy landed would otherwise stay blind to the key forever, which
+# is exactly the 401 we hit in production the first time. Cache hit =
+# the secret was actually fetched at least once.
+_vault_cache: dict[tuple[str, str], str] = {}
+_vault_cache_lock = threading.Lock()
 
 # (url substring, vault KV path, secret key name)
 # Ordered: more specific hosts first. Mistral's KV field name uses a
@@ -60,28 +68,41 @@ def resolve_api_key(api_url: str) -> str:
     return ""
 
 
-@lru_cache(maxsize=8)
 def _read_vault(path: str, key: str) -> str:
-    """Cached Vault KV read. Caches per (path, key) for the process lifetime.
+    """Return a Vault KV field, caching ONLY successful reads.
 
-    Cache size is small (8) because we only expect a handful of
-    provider paths. If the token expires the underlying hvac client
-    re-auths transparently; we never cache a specific token, only the
-    final secret value. On any error we return an empty string so the
-    caller raises ProviderAuthError rather than surfacing hvac internals.
+    Why not @lru_cache: during the first rollout of a new provider, a
+    pod can come up before the matching Vault policy is in place; the
+    read returns empty and lru_cache pins that empty forever. We want
+    subsequent calls to retry transparently until the secret appears.
+
+    On any error / empty result we return "" and the cache stays
+    un-populated for (path, key). On a non-empty hit the value is
+    stored in-process and reused for the pod's lifetime.
     """
+    cache_key = (path, key)
+    cached = _vault_cache.get(cache_key)
+    if cached:
+        return cached
+
     try:
         from skynet_vault import get_default_client
 
         client = get_default_client()
         client.authenticate()
-        return client.read_kv(path, key)
+        value = client.read_kv(path, key) or ""
     except Exception as e:
         # Log at debug — callers log at ERROR when they raise.
         logger.debug("Vault read %s.%s failed: %s", path, key, e)
         return ""
 
+    if value:
+        with _vault_cache_lock:
+            _vault_cache[cache_key] = value
+    return value
+
 
 def _reset_cache() -> None:
-    """Flush the Vault-read LRU. Tests only."""
-    _read_vault.cache_clear()
+    """Flush the Vault-read cache. Tests only."""
+    with _vault_cache_lock:
+        _vault_cache.clear()
