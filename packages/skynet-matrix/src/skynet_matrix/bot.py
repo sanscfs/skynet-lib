@@ -50,14 +50,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
-OnTextCallback = Callable[[Any, str], Awaitable[Optional[Any]]]
-
 from skynet_matrix.chronicle_mirror import get_mirror_client, mirror_message
 from skynet_matrix.commands import Command, HandlerCoro, parse_command_line
 from skynet_matrix.state_events import (
     STATE_EVENT_TYPE,
     publish_bot_commands_state,
 )
+
+OnTextCallback = Callable[[Any, str], Awaitable[Optional[Any]]]
 
 logger = logging.getLogger("skynet_matrix.bot")
 
