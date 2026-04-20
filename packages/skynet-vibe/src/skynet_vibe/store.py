@@ -39,6 +39,37 @@ class _AsyncQdrantLike(Protocol):
     ) -> list[dict]: ...
     async def get_point(self, collection: str, point_id, *, with_vector: bool = False) -> dict | None: ...
     async def set_payload(self, collection: str, point_ids: list, payload: dict) -> dict: ...
+    async def count(self, collection: str, *, filter: dict | None = None) -> int: ...
+    async def scroll(
+        self,
+        collection: str,
+        limit: int = 100,
+        *,
+        offset: str | int | None = None,
+        filter: dict | None = None,
+        with_payload: bool = True,
+        with_vector: bool = False,
+    ) -> tuple[list[dict], str | int | None]: ...
+
+
+def _extract_source_type(payload: dict[str, Any]) -> str:
+    """Return a human-readable source bucket from a signal payload.
+
+    Prefers ``source_v2.type`` (post-backfill structured source), falls
+    back to ``source.type`` (legacy Source-dict), then the plain
+    ``source`` string, then ``"unknown"``. Used by :meth:`VibeStore.pool_stats`.
+    """
+    src_v2 = payload.get("source_v2")
+    if isinstance(src_v2, dict):
+        t = src_v2.get("type")
+        if t:
+            return str(t)
+    src = payload.get("source")
+    if isinstance(src, dict):
+        return str(src.get("type") or "unknown")
+    if isinstance(src, str) and src:
+        return src
+    return str(payload.get("source_type") or "unknown")
 
 
 def _payload_from_signal(signal: VibeSignal, sub_category: str) -> dict[str, Any]:
@@ -181,19 +212,7 @@ class VibeStore:
         A ``category == sub_category`` filter is always applied; any additional
         filter in ``filter_`` is merged into it.
         """
-        must: list[dict] = [{"key": "category", "match": {"value": self.sub_category}}]
-        if filter_:
-            # If caller passed a pre-built filter dict, assume it's Qdrant
-            # native and merge its ``must`` clauses.
-            if "must" in filter_ and isinstance(filter_["must"], list):
-                must.extend(filter_["must"])
-            elif filter_:
-                # Raw {key: value} shortcut
-                for key, value in filter_.items():
-                    if key in ("must", "should", "must_not"):
-                        continue
-                    must.append({"key": key, "match": {"value": value}})
-        final_filter = {"must": must}
+        final_filter = self._vibe_filter(filter_)
         raw = await self.qdrant.search(
             self.collection,
             vector=list(query_vector),
@@ -249,6 +268,95 @@ class VibeStore:
                 )
             except Exception:
                 continue
+
+    async def count(self, filter_: dict | None = None) -> int:
+        """Return the exact number of vibe signals matching ``filter_``.
+
+        A ``category == sub_category`` clause is always enforced so this
+        always counts vibe signals and never bleeds into legacy records
+        co-resident in ``user_profile_raw``.
+        """
+        final_filter = self._vibe_filter(filter_)
+        return int(await self.qdrant.count(self.collection, filter=final_filter))
+
+    async def pool_stats(
+        self,
+        *,
+        limit: int = 2048,
+        extra_filter: dict | None = None,
+    ) -> dict[str, Any]:
+        """Return ``{count, by_source, oldest_ts}`` for the vibe pool.
+
+        Uses a single exact ``count`` call plus a bounded payload scroll
+        (for source-bucket breakdown + oldest timestamp). The scroll is
+        bounded so on very large pools this stays cheap; callers get the
+        exact total via ``count`` regardless.
+
+        Always filters by ``category == sub_category`` so only vibe
+        signals are counted. Additional ``extra_filter`` ``must`` clauses
+        are merged in.
+        """
+        final_filter = self._vibe_filter(extra_filter)
+        total = int(await self.qdrant.count(self.collection, filter=final_filter))
+
+        by_source: dict[str, int] = {}
+        oldest: str | None = None
+        # Scroll a bounded window for source-type breakdown. We do NOT
+        # need all points; even 2048 gives a representative distribution
+        # on a 13k pool. For exact by_source on very large pools, switch
+        # to a Qdrant facet query when the server version supports it.
+        offset: Any = None
+        scanned = 0
+        while scanned < limit:
+            batch_limit = min(256, limit - scanned)
+            points, next_offset = await self.qdrant.scroll(
+                self.collection,
+                limit=batch_limit,
+                offset=offset,
+                filter=final_filter,
+                with_payload=True,
+                with_vector=False,
+            )
+            if not points:
+                break
+            for p in points:
+                payload = p.get("payload") or {}
+                src = _extract_source_type(payload)
+                by_source[src] = by_source.get(src, 0) + 1
+                ts = payload.get("timestamp")
+                if isinstance(ts, str):
+                    if oldest is None or ts < oldest:
+                        oldest = ts
+            scanned += len(points)
+            if not next_offset:
+                break
+            offset = next_offset
+
+        return {
+            "count": total,
+            "sampled": scanned,
+            "by_source": dict(sorted(by_source.items(), key=lambda kv: -kv[1])),
+            "oldest_ts": oldest,
+            "collection": self.collection,
+            "category": self.sub_category,
+        }
+
+    def _vibe_filter(self, extra: dict | None) -> dict[str, Any]:
+        """Build a Qdrant filter that always pins category == sub_category.
+
+        Accepts either a raw ``{key: value}`` shortcut dict or a pre-built
+        Qdrant filter with a ``must`` list; merges them.
+        """
+        must: list[dict] = [{"key": "category", "match": {"value": self.sub_category}}]
+        if extra:
+            if "must" in extra and isinstance(extra["must"], list):
+                must.extend(extra["must"])
+            else:
+                for key, value in extra.items():
+                    if key in ("must", "should", "must_not"):
+                        continue
+                    must.append({"key": key, "match": {"value": value}})
+        return {"must": must}
 
     async def patch_vectors(self, signal_id: str, vectors: FacetVectors) -> None:
         """Update the facet vectors of an existing signal in-place.

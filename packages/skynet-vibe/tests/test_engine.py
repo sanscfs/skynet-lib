@@ -182,3 +182,32 @@ async def test_describe_current_vibe_empty_returns_canned(engine):
     text = await engine.describe_current_vibe(domain=None)
     # No domain -> we return the canned empty-pool text without hitting LLM
     assert "No vibe signals" in text
+
+
+@pytest.mark.asyncio
+async def test_vibe_pool_stats_sees_backfilled_points(engine, fake_qdrant):
+    """/vibe/status pool-stats path must find points in user_profile_raw.
+
+    Regression guard for the 2026-04-20 backfill: the movies/music
+    `/vibe/status` endpoint was reporting ``pool.available=false,
+    reason=store_unavailable`` because the old fallback reached for
+    ``store.client`` (which doesn't exist; the attribute is ``store.qdrant``).
+    The fix adds ``VibeEngine.vibe_pool_stats`` as the primary fast-path;
+    this test pins its shape.
+    """
+    # Two signals via absorb so all the payload fields are realistic.
+    await engine.absorb(
+        text="mellow evening mood",
+        source=Source(type="chat", room_id="!music"),
+    )
+    await engine.absorb(
+        text="sharp upbeat morning drive",
+        source=Source(type="chat", room_id="!music"),
+    )
+    stats = await engine.vibe_pool_stats(domain="music", window_days=14)
+    assert stats["available"] is True
+    assert stats["count"] == 2
+    assert stats["domain"] == "music"
+    assert stats["window_days"] == 14
+    # by_source exists, non-empty, with "chat" bucket
+    assert "chat" in stats["by_source"]

@@ -121,6 +121,54 @@ class FakeQdrant:
                 coll[pid]["payload"].update(payload)
         return {"status": "ok"}
 
+    def _matches_filter(self, payload: dict, filter: dict | None) -> bool:
+        if not filter or "must" not in filter:
+            return True
+        for clause in filter["must"]:
+            key = clause.get("key")
+            expected = clause.get("match", {}).get("value")
+            if payload.get(key) != expected:
+                return False
+        return True
+
+    async def count(self, collection: str, *, filter: dict | None = None) -> int:
+        coll = self._coll(collection)
+        return sum(1 for p in coll.values() if self._matches_filter(p["payload"], filter))
+
+    async def scroll(
+        self,
+        collection: str,
+        limit: int = 100,
+        *,
+        offset: Any = None,
+        filter: dict | None = None,
+        with_payload: bool = True,
+        with_vector: bool = False,
+    ) -> tuple[list[dict], Any]:
+        coll = self._coll(collection)
+        # Stable ordering: by id, so offset semantics are deterministic.
+        ordered = sorted(
+            (p for p in coll.values() if self._matches_filter(p["payload"], filter)),
+            key=lambda pt: str(pt["id"]),
+        )
+        start = 0
+        if offset is not None:
+            for i, pt in enumerate(ordered):
+                if str(pt["id"]) == str(offset):
+                    start = i
+                    break
+        window = ordered[start : start + limit]
+        out: list[dict] = []
+        for pt in window:
+            entry: dict[str, Any] = {"id": pt["id"]}
+            if with_payload:
+                entry["payload"] = dict(pt["payload"])
+            if with_vector:
+                entry["vector"] = list(pt["vector"])
+            out.append(entry)
+        next_offset = ordered[start + limit]["id"] if start + limit < len(ordered) else None
+        return out, next_offset
+
 
 @pytest.fixture
 def fake_qdrant():
