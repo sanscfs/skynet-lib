@@ -9,6 +9,7 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "skynet-capture",
     "skynet-consolidation",
     "skynet-core",
     "skynet-embedding",
@@ -1601,6 +1602,26 @@ wheels = [
 ]
 
 [[package]]
+name = "skynet-capture"
+version = "2026.4.26"
+source = { editable = "packages/skynet-capture" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[package.optional-dependencies]
+postgres = [
+    { name = "asyncpg" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.30" },
+    { name = "httpx", specifier = ">=0.27" },
+]
+provides-extras = ["postgres"]
+
+[[package]]
 name = "skynet-consolidation"
 version = "2026.4.13"
 source = { editable = "packages/skynet-consolidation" }
@@ -1739,7 +1760,7 @@ dev = [
 
 [[package]]
 name = "skynet-matrix"
-version = "2026.4.20.2"
+version = "2026.4.20.5"
 source = { editable = "packages/skynet-matrix" }
 dependencies = [
     { name = "httpx" },
@@ -1851,7 +1872,7 @@ requires-dist = [{ name = "hvac", specifier = ">=2.0,<3.0" }]
 
 [[package]]
 name = "skynet-vibe"
-version = "2026.4.20.4"
+version = "2026.4.21"
 source = { editable = "packages/skynet-vibe" }
 dependencies = [
     { name = "numpy" },

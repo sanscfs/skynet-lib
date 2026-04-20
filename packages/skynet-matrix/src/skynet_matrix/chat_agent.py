@@ -191,6 +191,10 @@ class ChatAgent:
                     logger.debug("chat_agent: tool_error_template format failed")
             return None
 
+        # {"_self_reply": True}: tool posted its own Matrix message; suppress ack.
+        if isinstance(result, dict) and result.get("_self_reply"):
+            return None
+
         ack = decision.get("reply")
         ack = ack.strip() if isinstance(ack, str) and ack.strip() else ""
         result_text = _render_result(result)
