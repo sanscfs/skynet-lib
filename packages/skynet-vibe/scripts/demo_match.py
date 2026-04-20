@@ -67,8 +67,10 @@ async def main() -> None:
     # Load the packaged v2 bank + auto-calibrate τ.
     prototypes.start_warmup()
     assert await prototypes.wait_ready(timeout=60.0)
-    print(f"prototypes: {len(prototypes.names())}  tau={prototypes.tau:.4f}  "
-          f"H_max={math.log2(len(prototypes.names())):.3f} bits")
+    print(
+        f"prototypes: {len(prototypes.names())}  tau={prototypes.tau:.4f}  "
+        f"H_max={math.log2(len(prototypes.names())):.3f} bits"
+    )
     print()
 
     events = [
