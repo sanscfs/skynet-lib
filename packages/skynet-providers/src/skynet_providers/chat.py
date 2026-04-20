@@ -126,9 +126,7 @@ async def _post_chat(
         raise ProviderError(f"transport error for {full}: {e}") from e
 
     if resp.status_code >= 400:
-        raise ProviderError(
-            f"upstream {resp.status_code} for {full}: {resp.text[:200]}"
-        )
+        raise ProviderError(f"upstream {resp.status_code} for {full}: {resp.text[:200]}")
     try:
         return _extract_content(resp.json())
     except ProviderError:
@@ -169,21 +167,29 @@ async def async_chat_completion(
 
     try:
         return await _post_chat(
-            url=api_url, headers=headers, payload=payload, timeout=timeout,
+            url=api_url,
+            headers=headers,
+            payload=payload,
+            timeout=timeout,
         )
     except ProviderError as primary_exc:
         if not fallback_api_url:
             raise
         logger.warning(
             "primary LLM %s failed (%s); falling back to %s",
-            api_url, str(primary_exc)[:200], fallback_api_url,
+            api_url,
+            str(primary_exc)[:200],
+            fallback_api_url,
         )
         fb_key = _resolve_key(fallback_api_url, fallback_api_key)
         fb_headers = {"Authorization": f"Bearer {fb_key}"} if fb_key else {}
         fb_payload = _build_payload(
-            prompt, system,
+            prompt,
+            system,
             fallback_model or model,
-            temperature, max_tokens, extra,
+            temperature,
+            max_tokens,
+            extra,
         )
         return await _post_chat(
             url=fallback_api_url,
