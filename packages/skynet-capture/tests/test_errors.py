@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from skynet_capture.common.errors import looks_like_integrity_error
 
 
