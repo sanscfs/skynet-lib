@@ -52,15 +52,9 @@ class MusicCapture:
         DDL rights (e.g. Vault dynamic users in skynet-music) must NOT call
         this; they rely on the schema being pre-applied.
         """
-        await pool.execute(
-            "ALTER TABLE listens ADD COLUMN IF NOT EXISTS notes TEXT"
-        )
-        await pool.execute(
-            "ALTER TABLE listens ADD COLUMN IF NOT EXISTS source_event_id TEXT"
-        )
-        await pool.execute(
-            "ALTER TABLE listens ADD COLUMN IF NOT EXISTS notes_source TEXT"
-        )
+        await pool.execute("ALTER TABLE listens ADD COLUMN IF NOT EXISTS notes TEXT")
+        await pool.execute("ALTER TABLE listens ADD COLUMN IF NOT EXISTS source_event_id TEXT")
+        await pool.execute("ALTER TABLE listens ADD COLUMN IF NOT EXISTS notes_source TEXT")
         await pool.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_listens_source_event "
             "ON listens (source_event_id, track_id) "

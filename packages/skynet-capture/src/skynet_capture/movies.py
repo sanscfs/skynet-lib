@@ -40,14 +40,8 @@ class MoviesCapture:
 
         Requires DDL privileges. Same caveat as ``MusicCapture.ensure_schema``.
         """
-        await pool.execute(
-            "ALTER TABLE watch_log "
-            "ADD COLUMN IF NOT EXISTS source_event_id TEXT"
-        )
-        await pool.execute(
-            "ALTER TABLE watch_log "
-            "ADD COLUMN IF NOT EXISTS notes_source TEXT"
-        )
+        await pool.execute("ALTER TABLE watch_log ADD COLUMN IF NOT EXISTS source_event_id TEXT")
+        await pool.execute("ALTER TABLE watch_log ADD COLUMN IF NOT EXISTS notes_source TEXT")
         await pool.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_watch_log_source_event "
             "ON watch_log (source_event_id, movie_id) "
