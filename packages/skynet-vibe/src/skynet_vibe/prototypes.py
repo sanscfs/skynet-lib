@@ -197,7 +197,7 @@ class PrototypeRegistry:
             return False
 
     async def _embed_phrases(self, phrases: list[str]) -> list[list[float]]:
-        return [await _embed_one(self._embedder, p) for p in phrases]
+        return list(await asyncio.gather(*[_embed_one(self._embedder, p) for p in phrases]))
 
     async def get(self, name: str) -> DomainPrototype:
         try:
@@ -263,8 +263,7 @@ class PrototypeRegistry:
 
     async def load_from_config(self, config: dict[str, list[str]]) -> None:
         """Bulk-load prototypes from a ``{name: [seed_phrases, ...]}`` dict."""
-        for name, seeds in config.items():
-            await self.add(name, list(seeds))
+        await asyncio.gather(*[self.add(name, list(seeds)) for name, seeds in config.items()])
 
     async def _load_defaults_impl(self) -> None:
         """Load the packaged default prototype bundle.

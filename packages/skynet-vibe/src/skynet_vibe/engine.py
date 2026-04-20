@@ -162,6 +162,7 @@ class VibeEngine:
         linked_rec_id: str | None = None,
         context_text: str | None = None,
         user_state_text: str | None = None,
+        extra_payload: dict | None = None,
     ) -> VibeSignal:
         """Embed, wrap, and persist a new vibe signal."""
         content_vec = await _embed(self.embedder, text)
@@ -175,6 +176,7 @@ class VibeEngine:
             timestamp=VibeSignal.now(),
             confidence=float(confidence),
             linked_rec_id=linked_rec_id,
+            extra_payload=dict(extra_payload) if extra_payload else {},
         )
         await self.store.put(signal)
         return signal
