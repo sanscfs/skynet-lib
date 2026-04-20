@@ -47,7 +47,8 @@ ToolDispatch = Callable[[str, dict[str, Any]], Awaitable[Any]]
 LLMCaller = Callable[[str, str], Awaitable[str]]
 
 
-_DEFAULT_SYSTEM = """You help the user manage {scope}. The user writes in Ukrainian in a chat with a bot called ``{bot_name}``.
+_DEFAULT_SYSTEM = """You help the user manage {scope}. \
+The user writes in Ukrainian in a chat with a bot called ``{bot_name}``.
 
 Decide ONE of these actions for each user message and return ONLY valid JSON (no markdown fences, no prose):
 
@@ -138,9 +139,7 @@ class ChatAgent:
             tool_schemas=json.dumps(self.tools, ensure_ascii=False, indent=2),
         )
 
-    async def _call_tool(
-        self, tool_name: str, decision: dict[str, Any]
-    ) -> Optional[Any]:
+    async def _call_tool(self, tool_name: str, decision: dict[str, Any]) -> Optional[Any]:
         args = decision.get("args") or {}
         if not isinstance(args, dict):
             logger.warning("chat_agent: tool %r args not a dict: %r", tool_name, args)
