@@ -31,9 +31,9 @@ from __future__ import annotations
 from .chat import async_chat_completion, chat_completion
 from .exceptions import ProviderAuthError, ProviderError
 from .model import (
+    VALID_TIERS,
     LLMClient,
     ModelOverride,
-    VALID_TIERS,
     get_redis_override,
     parse_model_args,
     resolve_model,

@@ -29,6 +29,10 @@ import logging
 import os
 import time
 from dataclasses import asdict, dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .override import Endpoint
 
 logger = logging.getLogger("skynet_providers.model")
 
