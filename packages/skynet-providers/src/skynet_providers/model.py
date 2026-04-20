@@ -43,11 +43,12 @@ _REDIS_KEY_PREFIX = "skynet:model"
 # Slots that cannot be changed via /model — require a migration process
 _IMMUTABLE_SLOTS: frozenset[str] = frozenset({"embed"})
 
-# Slots restricted to local-only provider
-_LOCAL_ONLY_SLOTS: frozenset[str] = frozenset({"hyde"})
-
-# Slots with a max tier cap (may not exceed this tier)
-_SLOT_MAX_TIER: dict[str, str] = {"rerank": "small"}
+# Slots with a max tier cap (may not exceed this tier).
+# hyde is capped at small: it generates short hypothetical passages (160
+# tokens, temp 0.2) — big/medium models are overkill and expensive here.
+# The provider is not restricted; local-with-cloud-fallback is the default
+# behavior managed by HYDE_OPENROUTER_FALLBACK in skynet-identity.
+_SLOT_MAX_TIER: dict[str, str] = {"rerank": "small", "hyde": "small"}
 
 _TIER_ORDER: list[str] = ["small", "medium", "big"]
 
@@ -183,11 +184,6 @@ def slot_allows_override(slot: str, override: ModelOverride) -> tuple[bool, str]
     """Return ``(allowed, reason_if_not)``."""
     if slot in _IMMUTABLE_SLOTS:
         return False, f"`{slot}` requires a migration — use `!embed-migrate` instead"
-    if slot in _LOCAL_ONLY_SLOTS:
-        if override.provider and override.provider != "local":
-            return False, f"`{slot}` is fixed to local (lightweight inference only)"
-        if override.tier and override.tier != "small":
-            return False, f"`{slot}` is fixed to local — tier is ignored"
     if slot in _SLOT_MAX_TIER and override.tier:
         max_t = _SLOT_MAX_TIER[slot]
         if override.tier in _TIER_ORDER and max_t in _TIER_ORDER:
