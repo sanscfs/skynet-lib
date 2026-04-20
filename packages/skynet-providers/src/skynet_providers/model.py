@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import asdict, dataclass
 
 logger = logging.getLogger("skynet_providers.model")
@@ -193,6 +194,108 @@ def slot_allows_override(slot: str, override: ModelOverride) -> tuple[bool, str]
 
 def redis_key(component: str, slot: str) -> str:
     return f"{_REDIS_KEY_PREFIX}:{component}:{slot}"
+
+
+class LLMClient:
+    """Redis-backed LLM endpoint resolver for any Skynet component.
+
+    Wraps tier/provider/model resolution + Vault key lookup into one object.
+    Works in both sync and async contexts — ``endpoint()`` is always sync
+    (Redis GET is a fast blocking call, cached for ``cache_ttl`` seconds).
+
+    When ``redis`` is None the client degrades gracefully: no runtime
+    overrides, just ``fallback_url``/``fallback_model`` from construction.
+    Inject Redis later via ``set_redis()`` without rebuilding the object.
+
+    Usage (async context)::
+
+        ep = ctx.llm.endpoint()
+        result = await async_chat_completion(
+            prompt, model=ep.model, api_url=ep.base_url,
+            api_key=ep.api_key or None,
+        )
+
+    Usage (sync context)::
+
+        result = ctx.llm.complete_sync(prompt, max_tokens=1000)
+    """
+
+    def __init__(
+        self,
+        component: str,
+        slot: str,
+        *,
+        redis=None,
+        fallback_url: str = "",
+        fallback_model: str = "",
+        cache_ttl: float = 30.0,
+    ) -> None:
+        self.component = component
+        self.slot = slot
+        self._redis = redis
+        self._fallback_url = fallback_url
+        self._fallback_model = fallback_model
+        self._cache_ttl = cache_ttl
+        self._cached_override: ModelOverride | None = None
+        self._cache_ts: float = 0.0
+
+    def set_redis(self, redis) -> None:
+        """Inject or replace Redis client; forces an immediate cache refresh."""
+        self._redis = redis
+        self._cache_ts = 0.0
+
+    def _refresh_override(self) -> ModelOverride:
+        now = time.time()
+        if self._redis and (now - self._cache_ts) > self._cache_ttl:
+            try:
+                fresh = get_redis_override(self._redis, self.component, self.slot)
+                self._cached_override = fresh
+            except Exception:
+                pass
+            self._cache_ts = now
+        return self._cached_override or ModelOverride()
+
+    def endpoint(self) -> "Endpoint":
+        """Return resolved Endpoint (cached for cache_ttl seconds).
+
+        No override → fallback_url + fallback_model (env-based).
+        Override with tier → resolves from TIER_* env vars in ConfigMap.
+        Override with provider+model → fully explicit.
+        """
+        from .override import resolve_endpoint
+
+        override = self._refresh_override()
+        provider, model = resolve_model(
+            override,
+            fallback_provider="",
+            fallback_model=self._fallback_model,
+        )
+        return resolve_endpoint(
+            provider,
+            model,
+            fallback_url=self._fallback_url,
+            fallback_model=self._fallback_model,
+        )
+
+    def complete_sync(self, prompt: str, **kwargs) -> str:
+        """Sync chat completion via resolved endpoint."""
+        from .chat import chat_completion
+
+        ep = self.endpoint()
+        return chat_completion(
+            prompt, model=ep.model, api_url=ep.base_url,
+            api_key=ep.api_key or None, **kwargs,
+        )
+
+    async def complete(self, prompt: str, **kwargs) -> str:
+        """Async chat completion via resolved endpoint."""
+        from .chat import async_chat_completion
+
+        ep = self.endpoint()
+        return await async_chat_completion(
+            prompt, model=ep.model, api_url=ep.base_url,
+            api_key=ep.api_key or None, **kwargs,
+        )
 
 
 def get_redis_override(redis, component: str, slot: str) -> ModelOverride | None:

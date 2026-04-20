@@ -1603,7 +1603,7 @@ wheels = [
 
 [[package]]
 name = "skynet-capture"
-version = "2026.4.26"
+version = "2026.4.27"
 source = { editable = "packages/skynet-capture" }
 dependencies = [
     { name = "httpx" },
@@ -1825,7 +1825,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "skynet-providers"
-version = "2026.4.23"
+version = "2026.4.24"
 source = { editable = "packages/skynet-providers" }
 dependencies = [
     { name = "httpx" },

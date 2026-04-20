@@ -31,6 +31,7 @@ from __future__ import annotations
 from .chat import async_chat_completion, chat_completion
 from .exceptions import ProviderAuthError, ProviderError
 from .model import (
+    LLMClient,
     ModelOverride,
     VALID_TIERS,
     get_redis_override,
@@ -59,4 +60,5 @@ __all__ = [
     "slot_allows_override",
     "get_redis_override",
     "set_redis_override",
+    "LLMClient",
 ]
