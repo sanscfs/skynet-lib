@@ -81,18 +81,33 @@ class MusicCapture:
         pool: PoolLike,
         title: str,
         year: Optional[int],
+        *,
+        artist_id: Optional[int] = None,
     ) -> int:
-        """Return album id keyed on title (case-insensitive), inserting if missing."""
+        """Return album id keyed on title (case-insensitive), inserting if missing.
+
+        When ``artist_id`` is provided and the existing row has no artist yet,
+        the row is updated in-place so the FK is never left NULL after we
+        know the artist.
+        """
         row = await pool.fetchrow(
-            "SELECT id FROM albums WHERE LOWER(title) = LOWER($1) LIMIT 1",
+            "SELECT id, artist_id FROM albums WHERE LOWER(title) = LOWER($1) LIMIT 1",
             title,
         )
         if row is not None:
-            return row["id"]
+            album_id = row["id"]
+            if artist_id is not None and row["artist_id"] is None:
+                await pool.execute(
+                    "UPDATE albums SET artist_id=$1 WHERE id=$2",
+                    artist_id,
+                    album_id,
+                )
+            return album_id
         row = await pool.fetchrow(
-            "INSERT INTO albums (title, year) VALUES ($1, $2) RETURNING id",
+            "INSERT INTO albums (title, year, artist_id) VALUES ($1, $2, $3) RETURNING id",
             title,
             year,
+            artist_id,
         )
         return row["id"]
 
@@ -172,7 +187,7 @@ class MusicCapture:
         if artist_name:
             artist_id = await cls.upsert_artist(pool, artist_name)
 
-        album_id = await cls.upsert_album(pool, track_name, year)
+        album_id = await cls.upsert_album(pool, track_name, year, artist_id=artist_id)
         track_id = await cls.upsert_track(pool, track_name, album_id)
         if artist_id is not None:
             await cls.link_track_artist(pool, track_id, artist_id)
@@ -197,3 +212,56 @@ class MusicCapture:
             source,
         )
         return track_id
+
+    @classmethod
+    async def persist_album_listen(
+        cls,
+        pool: PoolLike,
+        *,
+        artist: str,
+        album: str,
+        year: Optional[int] = None,
+        notes: Optional[str] = None,
+        source: str = "chat",
+        source_event_id: Optional[str] = None,
+        listened_at: Optional[datetime] = None,
+    ) -> int:
+        """Album-level listen: artist → album → listens(album_id).
+
+        Does NOT create a pseudo track. Use when the user listened to a full
+        album and the candidate type is "album" (e.g. from MusicBrainz).
+        The FK chain is: artists ← albums.artist_id, albums ← listens.album_id.
+
+        Returns the resolved ``album_id``.
+        """
+        album_title = (album or "").strip()
+        if not album_title:
+            raise ValueError("album title is required")
+        artist_name = (artist or "").strip()
+
+        artist_id: Optional[int] = None
+        if artist_name:
+            artist_id = await cls.upsert_artist(pool, artist_name)
+
+        album_id = await cls.upsert_album(pool, album_title, year, artist_id=artist_id)
+
+        await pool.execute(
+            """
+            INSERT INTO listens
+              (album_id, listened_at, source, notes, source_event_id, notes_source)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            """,
+            album_id,
+            listened_at or datetime.now(timezone.utc),
+            source,
+            notes or None,
+            source_event_id or None,
+            source,
+        )
+        log.debug(
+            "persist_album_listen: album_id=%s source_event_id=%s source=%s",
+            album_id,
+            source_event_id,
+            source,
+        )
+        return album_id
