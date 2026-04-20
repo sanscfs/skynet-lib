@@ -413,10 +413,7 @@ class VibeStore:
         """
         if not extra:
             # Return a deep-ish copy so callers can't mutate our base.
-            return {
-                k: list(v) if isinstance(v, list) else v
-                for k, v in self.pool_filter.items()
-            }
+            return {k: list(v) if isinstance(v, list) else v for k, v in self.pool_filter.items()}
 
         must_clauses: list[dict[str, Any]] = []
         if "must" in extra and isinstance(extra["must"], list):

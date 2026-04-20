@@ -165,9 +165,7 @@ class FakeQdrant:
             # Qdrant: ``should`` requires at least one match (disjunction)
             # when present. Empty list -> trivially satisfied (skip).
             should = filter["should"]
-            if should and not any(
-                self._matches_clause(payload, clause) for clause in should
-            ):
+            if should and not any(self._matches_clause(payload, clause) for clause in should):
                 return False
         return True
 

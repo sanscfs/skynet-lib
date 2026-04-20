@@ -37,11 +37,7 @@ def test_filter_with_extra_must_nests_disjunction() -> None:
     The disjunction is wrapped in a ``should`` sub-clause inside
     ``must``, so Qdrant evaluates ``(extra) AND (v>=2 OR category==...)``.
     """
-    extra = {
-        "must": [
-            {"key": "timestamp", "range": {"gte": "2026-04-01T00:00:00+00:00"}}
-        ]
-    }
+    extra = {"must": [{"key": "timestamp", "range": {"gte": "2026-04-01T00:00:00+00:00"}}]}
     f = vibe_signal_filter(extra)
     assert "must" in f
     assert len(f["must"]) == 2
@@ -54,10 +50,7 @@ def test_filter_with_extra_must_nests_disjunction() -> None:
     nested = f["must"][1]
     assert "should" in nested
     assert {"key": "signal_version", "range": {"gte": 2}} in nested["should"]
-    assert (
-        {"key": "category", "match": {"value": DEFAULT_VIBE_CATEGORY}}
-        in nested["should"]
-    )
+    assert {"key": "category", "match": {"value": DEFAULT_VIBE_CATEGORY}} in nested["should"]
 
 
 def test_filter_with_shortcut_dict_promotes_to_must_match() -> None:
@@ -99,15 +92,5 @@ def test_filter_preserves_caller_should_alongside_base() -> None:
     shoulds = [c for c in f["must"] if "should" in c]
     assert len(shoulds) == 2
     # Base disjunction has signal_version + category.
-    base = next(
-        s
-        for s in shoulds
-        if any(
-            c.get("key") == "signal_version" and "range" in c
-            for c in s["should"]
-        )
-    )
-    assert (
-        {"key": "category", "match": {"value": DEFAULT_VIBE_CATEGORY}}
-        in base["should"]
-    )
+    base = next(s for s in shoulds if any(c.get("key") == "signal_version" and "range" in c for c in s["should"]))
+    assert {"key": "category", "match": {"value": DEFAULT_VIBE_CATEGORY}} in base["should"]
