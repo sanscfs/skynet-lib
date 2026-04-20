@@ -83,10 +83,22 @@ def _payload_from_signal(signal: VibeSignal, sub_category: str) -> dict[str, Any
     memory_class = extra.pop("memory_class", "episodic")
     salience = extra.pop("salience", None)
     compression_level = extra.pop("compression_level", None)
+    # source_v2 mirrors the structured source dict so new writes show up
+    # in the ``signal_version == 2`` pool alongside backfilled records.
+    # We derive it from ``signal.source`` (a Source dataclass) with a
+    # minimal {type, writer} shape; richer fields can be added by callers
+    # via ``extra_payload`` if needed. See the 2026-04-20 backfill DAG
+    # for the canonical ``source`` -> ``source_v2`` mapping.
+    source_dict = signal.source.to_dict()
+    source_v2 = {"type": source_dict.get("type", "unknown")}
+    if source_dict.get("writer"):
+        source_v2["writer"] = source_dict["writer"]
     payload: dict[str, Any] = {
         "category": sub_category,
         "text_raw": signal.text_raw,
-        "source": signal.source.to_dict(),
+        "source": source_dict,
+        "source_v2": source_v2,
+        "signal_version": 2,
         "confidence": float(signal.confidence),
         "timestamp": signal.timestamp.isoformat(),
         "linked_rec_id": signal.linked_rec_id,
@@ -171,10 +183,26 @@ class VibeStore:
         qdrant_client: _AsyncQdrantLike,
         collection: str = "user_profile_raw",
         sub_category: str = "vibe_signal",
+        pool_filter: dict | None = None,
     ):
         self.qdrant = qdrant_client
         self.collection = collection
         self.sub_category = sub_category
+        # ``pool_filter`` is the filter used by ``pool_stats`` / ``count``
+        # to identify vibe-compatible points. Defaults to
+        # ``signal_version >= 2`` so it includes both new VibeStore.put()
+        # writes AND legacy records retrofitted by backfill DAGs that
+        # keep their original ``category`` (e.g. ``gemini_facts``,
+        # ``phone_telemetry``) but gain ``signal_version=2`` + ``source_v2``.
+        # See the 2026-04-20 schema backfill for the canonical example.
+        # Callers that want the strict "skynet-vibe writes only" view can
+        # pass ``pool_filter={"must": [{"key": "category",
+        # "match": {"value": "vibe_signal"}}]}``.
+        self.pool_filter = pool_filter or {
+            "must": [
+                {"key": "signal_version", "match": {"value": 2}},
+            ]
+        }
 
     # ------------------------------------------------------------------
     # CRUD-ish operations
@@ -270,13 +298,14 @@ class VibeStore:
                 continue
 
     async def count(self, filter_: dict | None = None) -> int:
-        """Return the exact number of vibe signals matching ``filter_``.
+        """Return the exact number of vibe-compatible points.
 
-        A ``category == sub_category`` clause is always enforced so this
-        always counts vibe signals and never bleeds into legacy records
-        co-resident in ``user_profile_raw``.
+        Uses ``self.pool_filter`` (default ``signal_version == 2``) so
+        this counts the full retrofitted-pool after the 2026-04-20
+        backfill, not just records skynet-vibe wrote itself. Pass
+        ``filter_`` to merge in additional ``must`` clauses.
         """
-        final_filter = self._vibe_filter(filter_)
+        final_filter = self._merge_pool_filter(filter_)
         return int(await self.qdrant.count(self.collection, filter=final_filter))
 
     async def pool_stats(
@@ -292,11 +321,14 @@ class VibeStore:
         bounded so on very large pools this stays cheap; callers get the
         exact total via ``count`` regardless.
 
-        Always filters by ``category == sub_category`` so only vibe
-        signals are counted. Additional ``extra_filter`` ``must`` clauses
-        are merged in.
+        Filter = ``self.pool_filter`` merged with ``extra_filter``.
+        Default ``pool_filter`` is ``signal_version == 2`` so the
+        endpoint reports the full retrofitted pool after the 2026-04-20
+        schema backfill -- which left the legacy ``category`` values
+        (phone_telemetry, gemini_facts, ...) intact and only added
+        ``signal_version`` + ``source_v2`` as new payload fields.
         """
-        final_filter = self._vibe_filter(extra_filter)
+        final_filter = self._merge_pool_filter(extra_filter)
         total = int(await self.qdrant.count(self.collection, filter=final_filter))
 
         by_source: dict[str, int] = {}
@@ -339,15 +371,36 @@ class VibeStore:
             "oldest_ts": oldest,
             "collection": self.collection,
             "category": self.sub_category,
+            "pool_filter": self.pool_filter,
         }
 
     def _vibe_filter(self, extra: dict | None) -> dict[str, Any]:
-        """Build a Qdrant filter that always pins category == sub_category.
+        """Build a Qdrant filter pinned to ``category == sub_category``.
 
-        Accepts either a raw ``{key: value}`` shortcut dict or a pre-built
-        Qdrant filter with a ``must`` list; merges them.
+        Used by ``search``: search targets strictly skynet-vibe-managed
+        signals, not the broader retrofitted pool. See ``_merge_pool_filter``
+        for the counting-path filter that spans the backfilled records.
         """
         must: list[dict] = [{"key": "category", "match": {"value": self.sub_category}}]
+        if extra:
+            if "must" in extra and isinstance(extra["must"], list):
+                must.extend(extra["must"])
+            else:
+                for key, value in extra.items():
+                    if key in ("must", "should", "must_not"):
+                        continue
+                    must.append({"key": key, "match": {"value": value}})
+        return {"must": must}
+
+    def _merge_pool_filter(self, extra: dict | None) -> dict[str, Any]:
+        """Build a Qdrant filter = ``self.pool_filter`` merged with ``extra``.
+
+        Used by ``count`` and ``pool_stats``. ``self.pool_filter`` is
+        typically ``signal_version == 2`` so the retrofitted 13k pool
+        (post 2026-04-20 backfill) counts as "vibe-compatible" even
+        though those records retain their original ``category`` values.
+        """
+        must: list[dict] = list(self.pool_filter.get("must", []))
         if extra:
             if "must" in extra and isinstance(extra["must"], list):
                 must.extend(extra["must"])

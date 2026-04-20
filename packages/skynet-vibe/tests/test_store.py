@@ -92,33 +92,54 @@ async def test_get_missing_returns_none(fake_qdrant) -> None:
 
 
 @pytest.mark.asyncio
-async def test_count_enforces_category_filter(fake_qdrant) -> None:
-    """count() must only see points with category == sub_category.
+async def test_count_includes_retrofitted_v2_points(fake_qdrant) -> None:
+    """count() must include backfill-retrofitted points.
 
-    Regression test: /vibe/status was returning store_unavailable
-    because the fallback looked for a non-existent ``store.client``
-    attribute and never reached the count path. Guard both the count
-    semantics and the attribute name here.
+    The 2026-04-20 backfill stamped ``signal_version=2`` + ``source_v2``
+    on ~13k pre-existing records in ``user_profile_raw`` while
+    preserving their legacy ``category`` values (``gemini_facts``,
+    ``phone_telemetry``, ``git_history``, ...). The pool filter defaults
+    to ``signal_version == 2`` so those records count as vibe-compatible,
+    not just new ``category=vibe_signal`` writes.
+
+    Also pins the ``store.qdrant`` attribute name (NOT ``store.client``
+    -- that was the root cause of the ``/vibe/status store_unavailable``
+    regression on a healthy 13k pool).
     """
     store = VibeStore(fake_qdrant, collection="test_coll", sub_category="vibe_signal")
-    # Two vibe signals
+    # Two brand-new vibe writes (category=vibe_signal via put()).
     await store.put(_make_signal())
     await store.put(_make_signal())
-    # One non-vibe point that should NOT be counted
+    # One backfill-retrofitted record that is NOT category=vibe_signal
+    # but IS signal_version=2 -- should be counted.
     await fake_qdrant.upsert(
         "test_coll",
         [
             {
-                "id": "legacy-pref",
+                "id": "retrofitted",
                 "vector": [0.1, 0.2, 0.3, 0.4],
-                "payload": {"category": "cinema_preferences", "text_raw": "no"},
-            }
+                "payload": {
+                    "category": "gemini_facts",  # legacy category preserved
+                    "signal_version": 2,
+                    "source": "google_takeout_gemini",
+                    "source_v2": {"type": "chat", "writer": "google-takeout"},
+                },
+            },
+            # A true legacy record with neither vibe_signal category nor
+            # signal_version=2 must NOT be counted.
+            {
+                "id": "pre-v2",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "payload": {"category": "phone_telemetry", "text_raw": "no"},
+            },
         ],
     )
-    # The store attribute for the qdrant client is ``qdrant`` (not ``client``);
-    # this check is the attribute-name regression guard.
     assert store.qdrant is fake_qdrant
-    assert await store.count() == 2
+    # All three signal_version=2 points are counted:
+    # - Two put() writes (VibeStore.put stamps signal_version=2 + source_v2)
+    # - One backfill-retrofitted record with legacy category=gemini_facts
+    # The pre-v2 legacy record (no signal_version) is NOT counted.
+    assert await store.count() == 3
 
 
 @pytest.mark.asyncio
@@ -129,6 +150,10 @@ async def test_pool_stats_backfilled_source_v2(fake_qdrant) -> None:
     carries ``source_v2`` with a structured type (chat/telemetry/dag/etc.).
     Older points retain their legacy ``source`` dict too. pool_stats
     prefers ``source_v2.type`` and falls back gracefully.
+
+    The pool filter (default ``signal_version == 2``) spans both new
+    category=vibe_signal writes AND retrofitted records whose
+    ``category`` is something else but signal_version==2.
     """
     store = VibeStore(fake_qdrant, collection="test_coll")
     # Two chat signals + one dag signal, mimicking post-backfill payload shape.
