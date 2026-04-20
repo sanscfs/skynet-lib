@@ -92,15 +92,19 @@ async def test_get_missing_returns_none(fake_qdrant) -> None:
 
 
 @pytest.mark.asyncio
-async def test_count_includes_retrofitted_v2_points(fake_qdrant) -> None:
-    """count() must include backfill-retrofitted points.
+async def test_count_inclusive_disjunction_spans_pool(fake_qdrant) -> None:
+    """count() must cover BOTH halves of the vibe pool.
 
     The 2026-04-20 backfill stamped ``signal_version=2`` + ``source_v2``
     on ~13k pre-existing records in ``user_profile_raw`` while
     preserving their legacy ``category`` values (``gemini_facts``,
-    ``phone_telemetry``, ``git_history``, ...). The pool filter defaults
-    to ``signal_version == 2`` so those records count as vibe-compatible,
-    not just new ``category=vibe_signal`` writes.
+    ``phone_telemetry``, ``git_history``, ...). New VibeStore writes
+    tag ``category=vibe_signal`` (and also stamp signal_version=2).
+
+    The default pool filter is a disjunction —
+    ``signal_version >= 2 OR category == vibe_signal`` — so BOTH
+    buckets are visible. The ``category=vibe_signal`` branch is kept
+    as a safety net for future writers that skip ``signal_version``.
 
     Also pins the ``store.qdrant`` attribute name (NOT ``store.client``
     -- that was the root cause of the ``/vibe/status store_unavailable``
@@ -110,23 +114,33 @@ async def test_count_includes_retrofitted_v2_points(fake_qdrant) -> None:
     # Two brand-new vibe writes (category=vibe_signal via put()).
     await store.put(_make_signal())
     await store.put(_make_signal())
-    # One backfill-retrofitted record that is NOT category=vibe_signal
-    # but IS signal_version=2 -- should be counted.
     await fake_qdrant.upsert(
         "test_coll",
         [
+            # Backfill-retrofitted: legacy category preserved, but
+            # signal_version=2 matches the range branch.
             {
                 "id": "retrofitted",
                 "vector": [0.1, 0.2, 0.3, 0.4],
                 "payload": {
-                    "category": "gemini_facts",  # legacy category preserved
+                    "category": "gemini_facts",
                     "signal_version": 2,
                     "source": "google_takeout_gemini",
                     "source_v2": {"type": "chat", "writer": "google-takeout"},
                 },
             },
-            # A true legacy record with neither vibe_signal category nor
-            # signal_version=2 must NOT be counted.
+            # Safety-net branch: no signal_version field at all, but
+            # category=vibe_signal matches -- hypothetical writer that
+            # forgot to stamp signal_version.
+            {
+                "id": "category-only",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "payload": {
+                    "category": "vibe_signal",
+                    "source": {"type": "chat"},
+                },
+            },
+            # Neither branch matches -- must not be counted.
             {
                 "id": "pre-v2",
                 "vector": [0.1, 0.2, 0.3, 0.4],
@@ -135,11 +149,12 @@ async def test_count_includes_retrofitted_v2_points(fake_qdrant) -> None:
         ],
     )
     assert store.qdrant is fake_qdrant
-    # All three signal_version=2 points are counted:
-    # - Two put() writes (VibeStore.put stamps signal_version=2 + source_v2)
-    # - One backfill-retrofitted record with legacy category=gemini_facts
-    # The pre-v2 legacy record (no signal_version) is NOT counted.
-    assert await store.count() == 3
+    # Four points match the disjunction:
+    # - Two put() writes (signal_version=2 AND category=vibe_signal)
+    # - One retrofitted record (signal_version=2 branch)
+    # - One category-only record (category=vibe_signal branch)
+    # The pre-v2 legacy record matches neither branch and is excluded.
+    assert await store.count() == 4
 
 
 @pytest.mark.asyncio

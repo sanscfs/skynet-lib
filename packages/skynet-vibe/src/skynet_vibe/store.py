@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from skynet_vibe.exceptions import SignalNotFoundError
+from skynet_vibe.filters import vibe_signal_filter
 from skynet_vibe.signals import FacetVectors, Source, VibeSignal
 
 
@@ -189,20 +190,25 @@ class VibeStore:
         self.collection = collection
         self.sub_category = sub_category
         # ``pool_filter`` is the filter used by ``pool_stats`` / ``count``
-        # to identify vibe-compatible points. Defaults to
-        # ``signal_version >= 2`` so it includes both new VibeStore.put()
-        # writes AND legacy records retrofitted by backfill DAGs that
-        # keep their original ``category`` (e.g. ``gemini_facts``,
-        # ``phone_telemetry``) but gain ``signal_version=2`` + ``source_v2``.
-        # See the 2026-04-20 schema backfill for the canonical example.
-        # Callers that want the strict "skynet-vibe writes only" view can
-        # pass ``pool_filter={"must": [{"key": "category",
-        # "match": {"value": "vibe_signal"}}]}``.
-        self.pool_filter = pool_filter or {
-            "must": [
-                {"key": "signal_version", "match": {"value": 2}},
-            ]
-        }
+        # to identify vibe-compatible points. Defaults to the disjunction
+        # ``signal_version >= 2 OR category == sub_category`` so it
+        # includes BOTH:
+        #   - new VibeStore.put() writes (tagged category=sub_category), AND
+        #   - legacy records retrofitted by backfill DAGs that keep
+        #     their original ``category`` (e.g. ``gemini_facts``,
+        #     ``phone_telemetry``) but gain ``signal_version=2`` +
+        #     ``source_v2``.
+        # Keeping BOTH checks as a safety net: if a future writer forgets
+        # to stamp ``signal_version`` it still lands in the pool via the
+        # ``category`` match, and if a retrofitted record keeps its legacy
+        # category it still lands via ``signal_version``. See the
+        # 2026-04-20 schema backfill + the filter helper for rationale.
+        # Callers that want a strict view can pass an explicit
+        # ``pool_filter`` -- typically ``{"must": [{"key": "category",
+        # "match": {"value": "vibe_signal"}}]}`` for legacy behaviour.
+        self.pool_filter = pool_filter or vibe_signal_filter(
+            vibe_category=sub_category,
+        )
 
     # ------------------------------------------------------------------
     # CRUD-ish operations
@@ -393,23 +399,38 @@ class VibeStore:
         return {"must": must}
 
     def _merge_pool_filter(self, extra: dict | None) -> dict[str, Any]:
-        """Build a Qdrant filter = ``self.pool_filter`` merged with ``extra``.
+        """Build a Qdrant filter = ``self.pool_filter`` AND ``extra``.
 
         Used by ``count`` and ``pool_stats``. ``self.pool_filter`` is
-        typically ``signal_version == 2`` so the retrofitted 13k pool
-        (post 2026-04-20 backfill) counts as "vibe-compatible" even
-        though those records retain their original ``category`` values.
+        the disjunction ``signal_version >= 2 OR category == sub_category``
+        by default (see :func:`skynet_vibe.filters.vibe_signal_filter`),
+        so the retrofitted 13k pool (post 2026-04-20 backfill) counts as
+        "vibe-compatible" alongside explicitly-tagged vibe writes.
+
+        If ``extra`` has no extra clauses, the base disjunction is
+        returned verbatim. Otherwise, the disjunction is nested inside
+        ``must`` so that ``extra.must`` clauses AND with the OR.
         """
-        must: list[dict] = list(self.pool_filter.get("must", []))
-        if extra:
-            if "must" in extra and isinstance(extra["must"], list):
-                must.extend(extra["must"])
-            else:
-                for key, value in extra.items():
-                    if key in ("must", "should", "must_not"):
-                        continue
-                    must.append({"key": key, "match": {"value": value}})
-        return {"must": must}
+        if not extra:
+            # Return a deep-ish copy so callers can't mutate our base.
+            return {k: list(v) if isinstance(v, list) else v for k, v in self.pool_filter.items()}
+
+        must_clauses: list[dict[str, Any]] = []
+        if "must" in extra and isinstance(extra["must"], list):
+            must_clauses.extend(extra["must"])
+        for key, value in extra.items():
+            if key in ("must", "should", "must_not"):
+                continue
+            must_clauses.append({"key": key, "match": {"value": value}})
+
+        base = self.pool_filter
+        if "should" in base and isinstance(base["should"], list):
+            # Disjunction base: nest it inside the must so extras AND it.
+            must_clauses.append({"should": list(base["should"])})
+        elif "must" in base and isinstance(base["must"], list):
+            # Simple conjunction base (back-compat for operator overrides).
+            must_clauses = list(base["must"]) + must_clauses
+        return {"must": must_clauses}
 
     async def patch_vectors(self, signal_id: str, vectors: FacetVectors) -> None:
         """Update the facet vectors of an existing signal in-place.
