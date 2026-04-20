@@ -305,7 +305,10 @@ class VibeEngine:
         """
         if len(text.strip()) < 10:
             return ProcessResult(
-                stored=False, novelty_weight=0.0, nearest_score=1.0, source_type=source_type,
+                stored=False,
+                novelty_weight=0.0,
+                nearest_score=1.0,
+                source_type=source_type,
             )
 
         vec = await _embed(self.embedder, text)
