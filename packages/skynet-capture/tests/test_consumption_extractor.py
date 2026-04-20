@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from skynet_capture.common.consumption_extractor import (
     MIN_LLM_TEXT_LEN,
     extract_consumption,
