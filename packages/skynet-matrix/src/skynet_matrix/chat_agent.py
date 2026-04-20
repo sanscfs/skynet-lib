@@ -186,9 +186,7 @@ class ChatAgent:
             logger.warning("chat_agent: tool %s failed: %s", tool_name, exc)
             if self.tool_error_template:
                 try:
-                    return self.tool_error_template.format(
-                        tool=tool_name, exc=type(exc).__name__
-                    )
+                    return self.tool_error_template.format(tool=tool_name, exc=type(exc).__name__)
                 except Exception:  # noqa: BLE001 -- malformed template
                     logger.debug("chat_agent: tool_error_template format failed")
             return None
