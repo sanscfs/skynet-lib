@@ -9,7 +9,7 @@
 # Base tag is kept in sync with the Airflow Helm chart. Bump together
 # with infra-apps/airflow/Chart.yaml + values.yaml.
 
-FROM apache/airflow:3.1.8
+FROM apache/airflow:3.2.0
 
 USER airflow
 
