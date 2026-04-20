@@ -289,6 +289,7 @@ class ImpulseEngine:
         heartbeat_seconds: Optional[int] = None,
         batch_size: Optional[int] = None,
         stop_event: Optional[asyncio.Event] = None,
+        on_tick=None,
     ) -> None:
         """Signal-driven main loop.
 
@@ -312,6 +313,14 @@ class ImpulseEngine:
             after the next iteration (current block is interrupted by
             the event's wake semantics — we race between the drain and
             the event).
+        on_tick:
+            Optional callable (sync or async) invoked after every
+            ``_process_signals`` pass with the resulting
+            :class:`TickResult`. The engine itself never sends Matrix
+            messages, bumps refractory, or emits ``spoke`` signals --
+            the ``on_tick`` callback is how callers plug in delivery
+            side effects. Exceptions inside the callback are logged
+            and swallowed so one bad delivery can't kill the loop.
         """
         cfg = self._cfg
         hb = heartbeat_seconds if heartbeat_seconds is not None else cfg.heartbeat_seconds
@@ -350,7 +359,17 @@ class ImpulseEngine:
             now = datetime.now(timezone.utc)
             try:
                 if signals:
-                    await self._process_signals(signals, now=now)
+                    result = await self._process_signals(signals, now=now)
+                    if on_tick is not None:
+                        try:
+                            cb_result = on_tick(result)
+                            if asyncio.iscoroutine(cb_result):
+                                await cb_result
+                        except Exception:  # noqa: BLE001
+                            log.exception(
+                                "impulse[%s] on_tick callback raised",
+                                cfg.domain,
+                            )
                 else:
                     # Block-timeout: safety-net housekeeping only.
                     self._heartbeat(now=now)
