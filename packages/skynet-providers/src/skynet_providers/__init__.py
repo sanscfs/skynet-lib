@@ -30,12 +30,17 @@ from __future__ import annotations
 
 from .chat import async_chat_completion, chat_completion
 from .exceptions import ProviderAuthError, ProviderError
+from .override import VALID_PROVIDERS, Endpoint, parse_override, resolve_endpoint
 from .resolver import resolve_api_key
 
 __all__ = [
     "chat_completion",
     "async_chat_completion",
     "resolve_api_key",
+    "parse_override",
+    "resolve_endpoint",
+    "Endpoint",
+    "VALID_PROVIDERS",
     "ProviderError",
     "ProviderAuthError",
 ]
