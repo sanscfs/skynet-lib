@@ -262,9 +262,7 @@ class VibeEngine:
             raise ValueError("suggest() requires at least one candidate")
 
         if not self.prototypes.ready:
-            raise PrototypeWarmingUpError(
-                f"prototype warmup in progress; target domain={domain!r} not yet available"
-            )
+            raise PrototypeWarmingUpError(f"prototype warmup in progress; target domain={domain!r} not yet available")
 
         target, pool = await self._weighted_target(domain=domain, context_text=context_text, pool_size=128)
         if not target:
