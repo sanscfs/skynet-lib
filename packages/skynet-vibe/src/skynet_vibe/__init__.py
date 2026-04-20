@@ -20,6 +20,7 @@ from skynet_vibe.exceptions import (
     VibeError,
 )
 from skynet_vibe.explain import describe_current_vibe, explain_signal
+from skynet_vibe.filters import DEFAULT_VIBE_CATEGORY, vibe_signal_filter
 from skynet_vibe.prototypes import DomainPrototype, PrototypeRegistry
 from skynet_vibe.signals import FacetVectors, Source, VibeSignal
 from skynet_vibe.store import VibeStore
@@ -45,6 +46,8 @@ __all__ = [
     "PrototypeWarmingUpError",
     "SignalNotFoundError",
     "EmbeddingError",
+    "DEFAULT_VIBE_CATEGORY",
+    "vibe_signal_filter",
 ]
 
-__version__ = "2026.4.20.1"
+__version__ = "2026.4.20.4"

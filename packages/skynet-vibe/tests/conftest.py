@@ -93,17 +93,8 @@ class FakeQdrant:
         coll = self._coll(collection)
         matches = []
         for p in coll.values():
-            if filter and "must" in filter:
-                match = True
-                for clause in filter["must"]:
-                    key = clause.get("key")
-                    expected = clause.get("match", {}).get("value")
-                    actual = p["payload"].get(key)
-                    if actual != expected:
-                        match = False
-                        break
-                if not match:
-                    continue
+            if not self._matches_filter(p["payload"], filter):
+                continue
             score = cosine(vector, p["vector"])
             if score_threshold is not None and score < score_threshold:
                 continue
@@ -121,13 +112,62 @@ class FakeQdrant:
                 coll[pid]["payload"].update(payload)
         return {"status": "ok"}
 
-    def _matches_filter(self, payload: dict, filter: dict | None) -> bool:
-        if not filter or "must" not in filter:
+    def _matches_clause(self, payload: dict, clause: dict) -> bool:
+        """Evaluate a single filter clause against a payload.
+
+        Supports the subset of Qdrant filter DSL the skynet-vibe code
+        actually emits:
+          * ``{"key": K, "match": {"value": V}}`` — exact match
+          * ``{"key": K, "range": {"gte": N, "lte": N, "gt": N, "lt": N}}``
+          * ``{"must": [...]}`` / ``{"should": [...]}`` / ``{"must_not": [...]}``
+            — nested sub-filter (same top-level semantics).
+        """
+        if "must" in clause or "should" in clause or "must_not" in clause:
+            return self._matches_filter(payload, clause)
+        key = clause.get("key")
+        if key is None:
             return True
-        for clause in filter["must"]:
-            key = clause.get("key")
-            expected = clause.get("match", {}).get("value")
-            if payload.get(key) != expected:
+        actual = payload.get(key)
+        if "match" in clause:
+            expected = clause["match"].get("value")
+            # Qdrant treats missing payload field as non-match.
+            return actual == expected
+        if "range" in clause:
+            rng = clause["range"]
+            if actual is None:
+                return False
+            try:
+                if "gte" in rng and not (actual >= rng["gte"]):
+                    return False
+                if "gt" in rng and not (actual > rng["gt"]):
+                    return False
+                if "lte" in rng and not (actual <= rng["lte"]):
+                    return False
+                if "lt" in rng and not (actual < rng["lt"]):
+                    return False
+            except TypeError:
+                return False
+            return True
+        return True
+
+    def _matches_filter(self, payload: dict, filter: dict | None) -> bool:
+        if not filter:
+            return True
+        if "must" in filter and isinstance(filter["must"], list):
+            for clause in filter["must"]:
+                if not self._matches_clause(payload, clause):
+                    return False
+        if "must_not" in filter and isinstance(filter["must_not"], list):
+            for clause in filter["must_not"]:
+                if self._matches_clause(payload, clause):
+                    return False
+        if "should" in filter and isinstance(filter["should"], list):
+            # Qdrant: ``should`` requires at least one match (disjunction)
+            # when present. Empty list -> trivially satisfied (skip).
+            should = filter["should"]
+            if should and not any(
+                self._matches_clause(payload, clause) for clause in should
+            ):
                 return False
         return True
 
