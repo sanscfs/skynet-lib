@@ -1,6 +1,6 @@
 [project]
 name = "skynet-vibe"
-version = "2026.4.20.4"
+version = "2026.4.21"
 description = "Universal vibe signal system: domain-as-prototype preference capture and retrieval"
 requires-python = ">=3.11"
 dependencies = [
@@ -29,3 +29,4 @@ packages = ["src/skynet_vibe"]
 [tool.hatch.build.targets.wheel.force-include]
 "src/skynet_vibe/emoji_vectors.json" = "skynet_vibe/emoji_vectors.json"
 "src/skynet_vibe/config/default_prototypes.yaml" = "skynet_vibe/config/default_prototypes.yaml"
+"src/skynet_vibe/config/prototypes_v2.yaml" = "skynet_vibe/config/prototypes_v2.yaml"

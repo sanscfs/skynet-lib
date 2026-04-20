@@ -17,14 +17,33 @@ was chosen over a dedicated Qdrant collection because:
 * No Qdrant round-trip for what ends up being a hot in-memory cosine loop.
 
 The ``config/default_prototypes.yaml`` shipped with the package defines the
-initial 11 domains; callers can add/override at runtime via :meth:`add` and
-:meth:`refresh`.
+initial 11 domains, and the v2 bank in ``config/prototypes_v2.yaml`` ships
+50 prototypes × 4 training phrases on 5 axes (used by ``match()``).
+Callers can add/override at runtime via :meth:`add` and :meth:`refresh`.
+
+Temperature calibration
+-----------------------
+The v2 bank introduces a registry-level ``tau`` attribute used by
+``VibeEngine.match()`` to soft-max over prototype cosines. ``tau`` is
+calibrated exactly once -- at the tail of ``start_warmup()`` -- by
+binary-searching τ ∈ [0.01, 2.0] until the MEAN Shannon entropy across
+all training phrases is approximately ``log2(N) / 4`` (i.e. the
+distribution is well-peaked but not degenerate). Nothing at runtime
+retunes τ. The only legitimate triggers for a recalibration are:
+
+* Pod restart / new warmup
+* Prototype set change (``refresh``, ``add`` with ``recalibrate=True``)
+* Embedding model change (manually call :meth:`calibrate_tau`)
+
+See feedback_adaptive_not_hardcoded: τ is a ratio (target H / H_max)
+rather than a magic constant the operator has to guess.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -107,11 +126,37 @@ class PrototypeRegistry:
     by whichever pipeline the caller has configured (e.g. ``skynet-embedding``).
     """
 
+    # Default τ before calibration. 1.0 is a reasonable starting point
+    # for cosines in [-1, 1]; after calibration this is typically
+    # 0.05 - 0.5 for a well-separated prototype bank.
+    DEFAULT_TAU: float = 1.0
+
+    # Target mean-entropy ratio for τ calibration. log2(N)/4 puts
+    # training phrases in the "moderately peaked" regime: well-chosen
+    # training phrases should resolve to their own prototype without
+    # collapsing the distribution to a delta function (which would make
+    # the entropy gate useless on real inputs that are never as clean
+    # as the training corpus).
+    TARGET_ENTROPY_RATIO: float = 1.0 / 4.0
+
+    # Binary-search bounds for τ. 0.01 is tight enough to saturate any
+    # reasonable cosine spread; 2.0 is loose enough that the whole set
+    # approaches uniform.
+    TAU_MIN: float = 0.01
+    TAU_MAX: float = 2.0
+
     def __init__(self, embedder: Embedder):
         self._embedder: Embedder = embedder
         self._prototypes: dict[str, DomainPrototype] = {}
         self._ready: asyncio.Event = asyncio.Event()
         self._warmup_task: asyncio.Task[None] | None = None
+        # τ and the training-phrase embeddings are populated by
+        # calibrate_tau() (called from _warmup). Until then match()
+        # should refuse via the `ready` gate.
+        self.tau: float = self.DEFAULT_TAU
+        # Per-prototype training-phrase embeddings, kept in memory so
+        # calibrate_tau can rerun deterministically without re-embedding.
+        self._training_embeddings: dict[str, list[list[float]]] = {}
 
     # ------------------------------------------------------------------
     # Warmup lifecycle
@@ -124,6 +169,17 @@ class PrototypeRegistry:
     async def _warmup(self) -> None:
         try:
             await self._load_defaults_impl()
+            # τ calibration is part of warmup -- once the prototypes are
+            # embedded we binary-search τ on the training phrases so the
+            # match() gate is well-conditioned on the first real event.
+            # If calibration fails for some reason (empty bank, degenerate
+            # embedder) we log and fall back to DEFAULT_TAU; match() will
+            # still work, it just won't be optimally peaked.
+            try:
+                self.calibrate_tau()
+            except Exception:
+                logger.exception("tau calibration failed; falling back to default")
+                self.tau = self.DEFAULT_TAU
             self._ready.set()
         except Exception:
             logger.exception("prototype warmup failed")
@@ -176,6 +232,11 @@ class PrototypeRegistry:
             last_refreshed=datetime.now(timezone.utc),
         )
         self._prototypes[name] = proto
+        # Cache per-phrase embeddings for τ calibration. Calibration
+        # reads this map directly so it never re-embeds -- important
+        # because re-embedding 50×4 = 200 phrases through a real
+        # embedder during a binary search would be wasteful.
+        self._training_embeddings[name] = [list(v) for v in vectors]
         return proto
 
     async def refresh(self, name: str, new_seed_phrases: list[str] | None = None) -> DomainPrototype:
@@ -197,6 +258,7 @@ class PrototypeRegistry:
             last_refreshed=datetime.now(timezone.utc),
         )
         self._prototypes[name] = refreshed
+        self._training_embeddings[name] = [list(v) for v in vectors]
         return refreshed
 
     async def load_from_config(self, config: dict[str, list[str]]) -> None:
@@ -205,16 +267,40 @@ class PrototypeRegistry:
             await self.add(name, list(seeds))
 
     async def _load_defaults_impl(self) -> None:
-        """Load the packaged ``config/default_prototypes.yaml`` bundle.
+        """Load the packaged default prototype bundle.
 
-        Convenience wrapper so callers can bootstrap 11 common domains with
-        one line. Requires PyYAML (listed in the package dependencies).
+        v2.0 ships ``config/prototypes_v2.yaml`` -- 50 prototypes across
+        5 axes, used by entropy-gated ``VibeEngine.match()``. If
+        the v2 file is present we prefer it; otherwise we fall back to
+        the legacy ``default_prototypes.yaml`` (11 domains) so old
+        deployments keep working until their image is bumped.
+
+        Requires PyYAML (listed in the package dependencies).
         """
         from importlib import resources
 
         import yaml  # type: ignore[import-not-found]
 
-        raw = resources.files("skynet_vibe").joinpath("config/default_prototypes.yaml").read_text(encoding="utf-8")
+        base = resources.files("skynet_vibe")
+
+        # Prefer v2 bank.
+        v2_path = base.joinpath("config/prototypes_v2.yaml")
+        if v2_path.is_file():
+            raw = v2_path.read_text(encoding="utf-8")
+            data = yaml.safe_load(raw) or {}
+            if not isinstance(data, dict):
+                raise ValueError("prototypes_v2.yaml must be a mapping")
+            # v2 schema: top-level ``prototypes`` key, value is
+            # name->list[phrases]. ``axes`` is metadata for humans/UI and
+            # is deliberately ignored at load time.
+            protos = data.get("prototypes")
+            if not isinstance(protos, dict):
+                raise ValueError("prototypes_v2.yaml missing 'prototypes' mapping")
+            await self.load_from_config({str(k): [str(x) for x in v] for k, v in protos.items()})
+            return
+
+        # Fallback: legacy flat layout.
+        raw = base.joinpath("config/default_prototypes.yaml").read_text(encoding="utf-8")
         data = yaml.safe_load(raw) or {}
         if not isinstance(data, dict):
             raise ValueError("default_prototypes.yaml must be a mapping of domain -> seed phrases")
@@ -232,6 +318,104 @@ class PrototypeRegistry:
 
     def remove(self, name: str) -> None:
         self._prototypes.pop(name, None)
+        self._training_embeddings.pop(name, None)
+
+    # ------------------------------------------------------------------
+    # τ calibration
+
+    def calibrate_tau(
+        self,
+        *,
+        target_ratio: float | None = None,
+        tau_min: float | None = None,
+        tau_max: float | None = None,
+        max_iterations: int = 40,
+    ) -> float:
+        """Binary-search τ so mean training-phrase entropy ≈ target.
+
+        Pure math, no I/O: uses the cached ``_training_embeddings`` and
+        the current ``_prototypes`` centroids, so it can be re-run after
+        the prototype set changes (e.g. ``refresh``) without touching
+        the embedder again.
+
+        Returns the calibrated τ and stores it on ``self.tau``. Raises
+        :class:`EmbeddingError` if there are no training embeddings or
+        no prototypes registered.
+        """
+        target_ratio = target_ratio if target_ratio is not None else self.TARGET_ENTROPY_RATIO
+        tau_low = tau_min if tau_min is not None else self.TAU_MIN
+        tau_high = tau_max if tau_max is not None else self.TAU_MAX
+
+        protos = list(self._prototypes.values())
+        if not protos:
+            raise EmbeddingError("calibrate_tau: no prototypes registered")
+        if not self._training_embeddings:
+            raise EmbeddingError("calibrate_tau: no training embeddings cached")
+
+        n = len(protos)
+        h_max = math.log2(n) if n > 1 else 1.0
+        target_h = target_ratio * h_max
+
+        # Flatten training phrases across all prototypes -- every cached
+        # embedding contributes one entropy observation.
+        training_vectors: list[list[float]] = []
+        for name in self._prototypes.keys():
+            training_vectors.extend(self._training_embeddings.get(name, []))
+        if not training_vectors:
+            raise EmbeddingError("calibrate_tau: cached training embeddings empty")
+
+        # Precompute the (N × M) cosine matrix once -- centroids fixed,
+        # training vectors fixed, τ just rescales the logits.
+        # cos_matrix[i][j] = cos(training_vector_i, prototype_j.centroid)
+        from skynet_vibe.affinity import cosine as _cos
+
+        cos_matrix: list[list[float]] = [[_cos(tv, p.centroid) for p in protos] for tv in training_vectors]
+
+        def _mean_entropy(tau: float) -> float:
+            if tau <= 0.0:
+                tau = 1e-6
+            total_h = 0.0
+            for row in cos_matrix:
+                logits = [c / tau for c in row]
+                max_l = max(logits)
+                exps = [math.exp(lg - max_l) for lg in logits]
+                s = sum(exps)
+                if s <= 0.0:
+                    total_h += h_max
+                    continue
+                probs = [e / s for e in exps]
+                h = 0.0
+                for p_i in probs:
+                    if p_i > 1e-12:
+                        h -= p_i * math.log2(p_i)
+                total_h += h
+            return total_h / len(cos_matrix)
+
+        # Mean entropy is monotonically increasing in τ: as τ → 0 softmax
+        # collapses to a delta (H → 0), as τ → ∞ it flattens (H → H_max).
+        # Standard binary search.
+        lo, hi = tau_low, tau_high
+        for _ in range(max_iterations):
+            mid = (lo + hi) / 2.0
+            h_mid = _mean_entropy(mid)
+            if h_mid < target_h:
+                lo = mid
+            else:
+                hi = mid
+            if hi - lo < 1e-5:
+                break
+        calibrated = (lo + hi) / 2.0
+        self.tau = float(calibrated)
+        logger.debug(
+            "tau calibrated: tau=%.5f mean_entropy=%.4f target=%.4f H_max=%.4f n_prototypes=%d n_phrases=%d",
+            self.tau,
+            _mean_entropy(self.tau),
+            target_h,
+            h_max,
+            n,
+            len(cos_matrix),
+        )
+        return self.tau
 
     # ------------------------------------------------------------------
     # Serialization (optional, for cache/debug)
