@@ -97,6 +97,10 @@ __all__ = [
     # Baseline
     "AdaptiveBaseline",
     "BaselineConfig",
+    # Calibration (adaptive half-life)
+    "CalibrationPersistence",
+    "CalibrationState",
+    "HalfLifeCalibrator",
     # Gate / Compose
     "GateClient",
     "ComposeClient",
