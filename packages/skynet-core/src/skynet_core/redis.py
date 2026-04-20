@@ -55,25 +55,36 @@ def get_async_redis(
     decode_responses: bool = True,
     *,
     force_new: bool = False,
+    socket_timeout: float | None = 5,
+    socket_connect_timeout: float | None = 5,
 ):
     """Return a lazy-initialized async Redis client.
 
     Requires `redis[hiredis]` or `redis` with asyncio support.
+
+    ``socket_timeout`` defaults to 5s, which is right for short-RTT
+    calls. Long-blocking consumers (e.g. the impulse engine's
+    ``XREADGROUP BLOCK 3600000`` signal-driven loop) must override this
+    via ``force_new=True`` plus ``socket_timeout=None`` (infinite) or a
+    value greater than their longest expected block. Otherwise the
+    socket timeout fires mid-block and drain returns a spurious error.
     """
     global _async_client
     if _async_client is not None and not force_new:
         return _async_client
     import redis.asyncio as aioredis
 
-    _async_client = aioredis.Redis(
+    client = aioredis.Redis(
         host=host,
         port=port,
         db=db,
         decode_responses=decode_responses,
-        socket_timeout=5,
-        socket_connect_timeout=5,
+        socket_timeout=socket_timeout,
+        socket_connect_timeout=socket_connect_timeout,
     )
-    return _async_client
+    if not force_new:
+        _async_client = client
+    return client
 
 
 def reset() -> None:

@@ -1,6 +1,6 @@
 [project]
 name = "skynet-core"
-version = "2026.4.4"
+version = "2026.4.5"
 description = "Skynet shared foundation: config, logging, tracing, Redis, health checks, impulse signal bus"
 requires-python = ">=3.12"
 dependencies = [
