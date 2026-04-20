@@ -22,7 +22,7 @@ from skynet_scoring import compute_decay_factor_logical
 
 from skynet_vibe.affinity import cosine, signal_weight
 from skynet_vibe.emoji import embed_emoji, phrase_for
-from skynet_vibe.exceptions import EmbeddingError, PrototypeNotFoundError
+from skynet_vibe.exceptions import EmbeddingError, PrototypeNotFoundError, PrototypeWarmingUpError
 from skynet_vibe.explain import describe_current_vibe as _describe_current_vibe
 from skynet_vibe.explain import explain_signal as _explain_signal
 from skynet_vibe.prototypes import PrototypeRegistry
@@ -260,6 +260,11 @@ class VibeEngine:
         """
         if not candidates:
             raise ValueError("suggest() requires at least one candidate")
+
+        if not self.prototypes.ready:
+            raise PrototypeWarmingUpError(
+                f"prototype warmup in progress; target domain={domain!r} not yet available"
+            )
 
         target, pool = await self._weighted_target(domain=domain, context_text=context_text, pool_size=128)
         if not target:
