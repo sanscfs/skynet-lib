@@ -100,6 +100,11 @@ class ChatAgent:
     # ``ChatAgent`` was constructed) are silently dropped. Set to 0 to
     # disable the guard entirely.
     skip_older_than_seconds: int = 120
+    # When set, a tool dispatch exception is surfaced to the user via
+    # ``template.format(tool=..., exc=...)`` instead of silently dropping
+    # the LLM-parsed intent. Default ``None`` preserves silence-is-default;
+    # services that want the bot to acknowledge a failed action opt in.
+    tool_error_template: Optional[str] = None
     _started_at: float = field(default_factory=time.time, init=False, repr=False)
 
     async def handle(self, event: Any, body: str) -> Optional[Any]:
@@ -179,6 +184,13 @@ class ChatAgent:
             result = await self.dispatch(tool_name, args)
         except Exception as exc:  # noqa: BLE001
             logger.warning("chat_agent: tool %s failed: %s", tool_name, exc)
+            if self.tool_error_template:
+                try:
+                    return self.tool_error_template.format(
+                        tool=tool_name, exc=type(exc).__name__
+                    )
+                except Exception:  # noqa: BLE001 -- malformed template
+                    logger.debug("chat_agent: tool_error_template format failed")
             return None
 
         ack = decision.get("reply")
