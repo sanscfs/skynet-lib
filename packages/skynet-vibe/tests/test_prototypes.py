@@ -84,7 +84,10 @@ async def test_start_warmup_is_non_blocking(async_hash_embedder) -> None:
     async def slow_embedder(text: str) -> list[float]:
         nonlocal slow_calls
         slow_calls += 1
-        await asyncio.sleep(0.05)
+        # Tiny sleep so we can observe the non-blocking return. The v2
+        # prototype bank is ~200 phrases; 5ms × 200 ≈ 1s, well under the
+        # timeout below.
+        await asyncio.sleep(0.005)
         return await async_hash_embedder(text)
 
     registry = PrototypeRegistry(slow_embedder)
@@ -97,7 +100,7 @@ async def test_start_warmup_is_non_blocking(async_hash_embedder) -> None:
     assert after == before
     assert registry.ready is False
     # Clean up the scheduled task so pytest doesn't complain.
-    assert await registry.wait_ready(timeout=10.0) is True
+    assert await registry.wait_ready(timeout=30.0) is True
 
 
 @pytest.mark.asyncio

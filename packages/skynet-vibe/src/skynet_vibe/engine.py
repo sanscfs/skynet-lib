@@ -3,6 +3,7 @@
 :class:`VibeEngine` ties together the embedder, the store, the prototype
 registry, and the LLM client into a small surface:
 
+* :meth:`match` -- entropy-gated prototype classification (v2 API).
 * :meth:`absorb` -- capture a text signal from any source.
 * :meth:`absorb_emoji` -- capture an emoji reaction.
 * :meth:`suggest` -- score candidates against the weighted vibe cloud and
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
@@ -95,6 +97,37 @@ class SuggestResult:
     vibe_summary: str = ""
 
 
+@dataclass
+class MatchResult:
+    """Output of :meth:`VibeEngine.match` -- entropy-gated classification.
+
+    All fields are always populated; callers can keep or discard the
+    signal based on ``accepted`` alone, but ``entropy_bits`` /
+    ``softmax_probs`` / ``cosines`` are preserved for debug payloads
+    (feedback_adaptive_not_hardcoded: we never hardcode a score cutoff,
+    the confidence IS the entropy-normalised number).
+
+    * ``winner`` -- name of the prototype with the highest softmax prob.
+    * ``confidence`` -- ``1 - H/H_max`` where ``H`` is Shannon entropy
+      of the softmax distribution (in bits) and ``H_max = log2(N)``.
+      1.0 = completely peaked on one prototype; 0.0 = uniform.
+    * ``entropy_bits`` -- raw Shannon entropy ``H`` of the distribution.
+    * ``softmax_probs`` -- full per-prototype probability mass.
+    * ``cosines`` -- raw pre-softmax cosines (useful for spotting a
+      non-semantic input where all cosines are ~0).
+    * ``accepted`` -- ``H <= H_max / 2`` gate. Below half of the maximum
+      possible entropy the distribution is considered "peaked enough"
+      to persist; above, the winner is noise and the caller should drop.
+    """
+
+    winner: str
+    confidence: float
+    entropy_bits: float
+    softmax_probs: dict[str, float]
+    cosines: dict[str, float]
+    accepted: bool
+
+
 class VibeEngine:
     """Top-level coordinator for the vibe signal system."""
 
@@ -170,6 +203,92 @@ class VibeEngine:
         )
         await self.store.put(signal)
         return signal
+
+    # ------------------------------------------------------------------
+    # Match (v2: entropy-gated classification)
+
+    async def match(
+        self,
+        text: str,
+        *,
+        embedder: Embedder | None = None,
+    ) -> MatchResult:
+        """Classify ``text`` against every registered prototype.
+
+        Pipeline:
+
+        1. Embed ``text`` (via ``embedder`` if supplied, else ``self.embedder``).
+        2. Compute cosine against every prototype centroid.
+        3. Softmax over the cosine vector at temperature
+           ``self.prototypes.tau`` (calibrated once at warmup).
+        4. Shannon entropy of the softmax distribution, in bits.
+        5. Accept iff ``H <= H_max / 2`` where ``H_max = log2(N)``.
+
+        The ``τ/H/accepted`` trio replaces the v1 absolute-cosine threshold
+        (``min_score``) + top-2 margin + rolling-window dead code --- see
+        feedback_adaptive_not_hardcoded. The only tunable "knob" that
+        survives is the warmup target mean entropy (``log2(N)/4``), which
+        is a ratio of the theoretical maximum, not a magic constant.
+
+        Raises :class:`PrototypeWarmingUpError` if the registry hasn't
+        finished embedding its prototypes yet. Raises
+        :class:`EmbeddingError` if the embedder returns a bad vector or
+        there are zero registered prototypes.
+        """
+        if not self.prototypes.ready:
+            raise PrototypeWarmingUpError("prototype warmup in progress; match() not available yet")
+
+        protos = self.prototypes.all()
+        if not protos:
+            raise EmbeddingError("match() called with zero registered prototypes")
+
+        active_embedder: Embedder = embedder if embedder is not None else self.embedder
+        vec = await _embed(active_embedder, text)
+
+        tau = float(getattr(self.prototypes, "tau", 1.0) or 1.0)
+
+        # Compute cosines and softmax logits in one pass.
+        names: list[str] = []
+        cosines: list[float] = []
+        for p in protos:
+            names.append(p.name)
+            cosines.append(cosine(vec, p.centroid))
+
+        # Numerically stable softmax at temperature tau.
+        logits = [c / tau for c in cosines]
+        max_logit = max(logits)
+        exps = [math.exp(lg - max_logit) for lg in logits]
+        total = sum(exps)
+        if total <= 0.0:
+            # Degenerate: treat as uniform.
+            probs = [1.0 / len(protos)] * len(protos)
+        else:
+            probs = [e / total for e in exps]
+
+        # Shannon entropy in bits (base 2).
+        h_bits = 0.0
+        for p_i in probs:
+            if p_i > 1e-12:
+                h_bits -= p_i * math.log2(p_i)
+        h_max = math.log2(len(protos)) if len(protos) > 1 else 1.0
+        confidence = 1.0 - (h_bits / h_max) if h_max > 0 else 0.0
+        # Clamp against float drift.
+        if confidence < 0.0:
+            confidence = 0.0
+        if confidence > 1.0:
+            confidence = 1.0
+
+        winner_idx = max(range(len(probs)), key=lambda i: probs[i])
+        accepted = h_bits <= (h_max / 2.0)
+
+        return MatchResult(
+            winner=names[winner_idx],
+            confidence=float(confidence),
+            entropy_bits=float(h_bits),
+            softmax_probs={name: float(p) for name, p in zip(names, probs, strict=True)},
+            cosines={name: float(c) for name, c in zip(names, cosines, strict=True)},
+            accepted=bool(accepted),
+        )
 
     # ------------------------------------------------------------------
     # Suggest
