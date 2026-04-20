@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
@@ -93,6 +94,13 @@ class ChatAgent:
     # Optional sender filter (e.g. ``{"@sanscfs:matrix.sanscfs.dev"}``)
     # — when non-empty, only those senders can trigger ``handle``.
     allowed_senders: set[str] = field(default_factory=set)
+    # Guard against historical-message bursts: on first ``/sync`` the
+    # Matrix client replays room backlog, which otherwise fires an LLM
+    # call per stale message. Events older than this (seconds since the
+    # ``ChatAgent`` was constructed) are silently dropped. Set to 0 to
+    # disable the guard entirely.
+    skip_older_than_seconds: int = 120
+    _started_at: float = field(default_factory=time.time, init=False, repr=False)
 
     async def handle(self, event: Any, body: str) -> Optional[Any]:
         """``CommandBot.on_text`` entry point. Never raises."""
@@ -107,6 +115,24 @@ class ChatAgent:
         if not self.tools:
             logger.debug("chat_agent: no tools registered, staying silent")
             return None
+        # Skip historical messages replayed by the first ``/sync`` after
+        # boot. ``server_timestamp`` is milliseconds since epoch per nio.
+        # We compare against both the bot start time (drops ALL backlog
+        # events) and an absolute "stale message" cutoff (drops anything
+        # surprisingly old even after bot has been up a while — could
+        # happen if Matrix replays on reconnect).
+        if self.skip_older_than_seconds > 0:
+            ts_ms = getattr(event, "server_timestamp", None)
+            if isinstance(ts_ms, (int, float)):
+                ts_s = ts_ms / 1000.0
+                now = time.time()
+                if ts_s < self._started_at or (now - ts_s) > self.skip_older_than_seconds:
+                    logger.debug(
+                        "chat_agent: skipping stale event (age=%.1fs, started=%.1fs ago)",
+                        now - ts_s,
+                        now - self._started_at,
+                    )
+                    return None
 
         system = self._render_system()
         try:

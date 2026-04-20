@@ -1688,7 +1688,7 @@ provides-extras = ["louvain"]
 
 [[package]]
 name = "skynet-impulse"
-version = "2026.4.19"
+version = "2026.4.20"
 source = { editable = "packages/skynet-impulse" }
 dependencies = [
     { name = "numpy" },
@@ -1739,7 +1739,7 @@ dev = [
 
 [[package]]
 name = "skynet-matrix"
-version = "2026.4.19.3"
+version = "2026.4.20.1"
 source = { editable = "packages/skynet-matrix" }
 dependencies = [
     { name = "httpx" },
@@ -1804,7 +1804,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "skynet-providers"
-version = "2026.4.21"
+version = "2026.4.22.1"
 source = { editable = "packages/skynet-providers" }
 dependencies = [
     { name = "httpx" },

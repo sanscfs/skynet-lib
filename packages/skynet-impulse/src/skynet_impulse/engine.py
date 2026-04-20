@@ -6,6 +6,17 @@ version is async, domain-parameterised via ``EngineConfig``, and emits a
 ``TickResult`` every tick so callers can log / persist without re-deriving
 state.
 
+**Tick vs heartbeat (signal-driven loop, 2026-04-20)**
+
+Historically the engine was driven by a wall-clock polling loop that
+called :meth:`tick` every ``tick_interval_seconds`` seconds. That is now
+optional: :meth:`run_forever` blocks on ``XREADGROUP BLOCK`` against the
+shared impulse stream and wakes immediately when a signal arrives. A
+slow heartbeat (default 1h) still fires on timeout to run decay +
+refractory housekeeping so long silences don't freeze drive state
+forever. This matches the project's ``decay = logical time`` rule --
+refractories tick on signal events, not wall-clock seconds.
+
 Tick sequence (matches the original agent logic, extended):
 
     1. Drain signals from the domain's Redis consumer group (async).
@@ -80,7 +91,19 @@ class EngineConfig:
     rate_limit_window_seconds: int = 86400
     # Exploration / behavior
     epsilon_greedy: float = 0.05
+    # DEPRECATED: wall-clock tick polling is retired in favour of
+    # signal-driven ``run_forever``. Kept only so existing callers that
+    # read ``cfg.tick_interval_seconds`` still work; when
+    # ``heartbeat_seconds`` is left at its default, the value below is
+    # copied over as a best-effort back-compat fallback.
     tick_interval_seconds: int = 900
+    # Heartbeat: maximum time between housekeeping passes when no signals
+    # are arriving. 3600s matches the project's wiki guidance of "decay
+    # runs when something new arrives OR once an hour, whichever first".
+    heartbeat_seconds: int = 3600
+    # Max signals to drain per wake-up. Larger = fewer round-trips,
+    # smaller = lower tail latency on bursts. 10 is a sane middle.
+    batch_size: int = 10
     staleness_threshold_hours: int = 24
     # Consumer
     consumer_group: str = DEFAULT_CONSUMER_GROUP
@@ -116,6 +139,10 @@ class EngineConfig:
             raise ConfigError(f"epsilon_greedy must be in [0, 1]; got {self.epsilon_greedy!r}")
         if self.rate_limit_per_day < 0:
             raise ConfigError("rate_limit_per_day must be >= 0")
+        if self.heartbeat_seconds <= 0:
+            raise ConfigError("heartbeat_seconds must be > 0")
+        if self.batch_size <= 0:
+            raise ConfigError("batch_size must be > 0")
 
 
 @dataclass
@@ -227,7 +254,14 @@ class ImpulseEngine:
     # ---- Main tick --------------------------------------------------------
 
     async def tick(self) -> TickResult:
-        """One full tick. Pure side-effect on Redis; never raises."""
+        """One full tick (legacy non-blocking drain).
+
+        Retained for test harnesses, manual triggers, and back-compat with
+        callers that still drive the engine on a wall-clock cadence. New
+        code should prefer :meth:`run_forever` which is signal-driven.
+
+        Pure side-effect on Redis; never raises.
+        """
         now = datetime.now(timezone.utc)
         try:
             signals = await self._drain()
@@ -245,6 +279,104 @@ class ImpulseEngine:
             )
             self._record(result)
             return result
+        return await self._process_signals(signals, now=now)
+
+    # ---- Signal-driven run loop ------------------------------------------
+
+    async def run_forever(
+        self,
+        *,
+        heartbeat_seconds: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        stop_event: Optional[asyncio.Event] = None,
+    ) -> None:
+        """Signal-driven main loop.
+
+        Blocks on ``XREADGROUP BLOCK`` for up to ``heartbeat_seconds``;
+        whenever one or more signals arrive they are processed via the
+        same ``_process_signals`` pipeline that :meth:`tick` uses. On the
+        block-timeout path :meth:`_heartbeat` runs instead — it only
+        does time-independent housekeeping (drive decay + refractory
+        expiry + staleness bookkeeping), never the gate/compose LLM
+        calls. That means long silences don't burn LLM budget.
+
+        Parameters
+        ----------
+        heartbeat_seconds:
+            Override for ``cfg.heartbeat_seconds``. Mostly useful in
+            tests that want a shorter safety-net timeout.
+        batch_size:
+            Override for ``cfg.batch_size``.
+        stop_event:
+            Optional asyncio event. When set, the loop exits cleanly
+            after the next iteration (current block is interrupted by
+            the event's wake semantics — we race between the drain and
+            the event).
+        """
+        cfg = self._cfg
+        hb = heartbeat_seconds if heartbeat_seconds is not None else cfg.heartbeat_seconds
+        batch = batch_size if batch_size is not None else cfg.batch_size
+        block_ms = max(1, int(hb * 1000))
+
+        log.info(
+            "impulse[%s] engine waiting for signals on stream=%s group=%s "
+            "consumer=%s heartbeat_seconds=%d batch_size=%d",
+            cfg.domain, cfg.stream_name, cfg.consumer_group, cfg.consumer_name,
+            hb, batch,
+        )
+
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                log.info("impulse[%s] stop_event set, exiting run_forever", cfg.domain)
+                return
+            try:
+                signals = await self._drain(block_ms=block_ms, count=batch)
+            except asyncio.CancelledError:
+                log.info("impulse[%s] run_forever cancelled", cfg.domain)
+                raise
+            except Exception as e:  # noqa: BLE001
+                log.warning("impulse[%s] drain error in run_forever: %s", cfg.domain, e)
+                # Brief backoff so a broken Redis doesn't hot-spin.
+                try:
+                    await asyncio.sleep(5)
+                except asyncio.CancelledError:
+                    raise
+                continue
+
+            now = datetime.now(timezone.utc)
+            try:
+                if signals:
+                    await self._process_signals(signals, now=now)
+                else:
+                    # Block-timeout: safety-net housekeeping only.
+                    self._heartbeat(now=now)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                log.exception("impulse[%s] process loop error", cfg.domain)
+                # Never exit the loop on per-iteration errors.
+                try:
+                    await asyncio.sleep(1)
+                except asyncio.CancelledError:
+                    raise
+
+    # ---- Process one batch of signals ------------------------------------
+
+    async def _process_signals(
+        self,
+        signals: list[Signal],
+        *,
+        now: Optional[datetime] = None,
+    ) -> TickResult:
+        """Apply signals -> drives -> baseline -> gate -> compose.
+
+        This is the shared body for both :meth:`tick` (legacy wall-clock)
+        and :meth:`run_forever` (signal-driven). Refractory countdown
+        happens here, so refractories are counted in *signal events* not
+        wall-clock ticks -- matching the project's logical-time decay
+        convention (see ``memory/feedback_decay_logical_time.md``).
+        """
+        now = now or datetime.now(timezone.utc)
 
         # Update + persist drive state.
         state = self._homeostat.load_state(self._redis)
@@ -367,15 +499,45 @@ class ImpulseEngine:
 
     # ---- Internals --------------------------------------------------------
 
-    async def _drain(self) -> list[Signal]:
-        """Pull pending signals from the bus for our consumer group."""
-        pairs = await _maybe_await(
-            self._bus.drain_signals,
-            self._cfg.consumer_name,
-            group=self._cfg.consumer_group,
-            async_redis=self._redis,
-            stream=self._cfg.stream_name,
-        )
+    async def _drain(
+        self,
+        *,
+        block_ms: Optional[int] = None,
+        count: Optional[int] = None,
+    ) -> list[Signal]:
+        """Pull pending signals from the bus for our consumer group.
+
+        ``block_ms`` and ``count`` are optional forwards to the bus
+        adapter's ``drain_signals``. Older adapters that don't accept
+        these kwargs are tolerated via a ``TypeError`` fallback so
+        callers on older code paths (e.g. legacy :meth:`tick`) keep
+        working unchanged.
+        """
+        kwargs = {
+            "group": self._cfg.consumer_group,
+            "async_redis": self._redis,
+            "stream": self._cfg.stream_name,
+        }
+        if block_ms is not None:
+            kwargs["block_ms"] = block_ms
+        if count is not None:
+            kwargs["count"] = count
+        try:
+            pairs = await _maybe_await(
+                self._bus.drain_signals,
+                self._cfg.consumer_name,
+                **kwargs,
+            )
+        except TypeError:
+            # Older adapter: retry without the new kwargs. Accept both
+            # signal-driven and legacy adapters on the same code path.
+            kwargs.pop("block_ms", None)
+            kwargs.pop("count", None)
+            pairs = await _maybe_await(
+                self._bus.drain_signals,
+                self._cfg.consumer_name,
+                **kwargs,
+            )
         sigs: list[Signal] = []
         ids: list[str] = []
         for entry_id, sig in pairs or []:
@@ -393,6 +555,34 @@ class ImpulseEngine:
             except Exception as e:  # noqa: BLE001
                 log.debug("impulse[%s] ack failed: %s", self._cfg.domain, e)
         return sigs
+
+    # ---- Heartbeat (slow housekeeping) -----------------------------------
+
+    def _heartbeat(self, *, now: Optional[datetime] = None) -> None:
+        """Safety-net housekeeping fired on block-timeout in run_forever.
+
+        Does only time-independent work:
+
+        * Apply ``growth_per_tick`` for drives that grow passively (e.g.
+          the agent's ``boredom`` drive).
+        * Apply one decay step to drives that didn't just get bumped.
+        * Persist drive state.
+
+        Explicitly does NOT run the LLM gate, compose, or touch
+        refractories: refractories are "number of signal events since
+        last bump" per the logical-time convention. Drive state,
+        however, does need to evolve across very long quiet periods or
+        dominant-drive values become misleading artefacts of the last
+        signal burst.
+        """
+        _ = now or datetime.now(timezone.utc)
+        try:
+            state = self._homeostat.load_state(self._redis)
+            # pushed_drives=set() means every drive decays this heartbeat.
+            self._homeostat.apply_decay(state, pushed_drives=set())
+            self._homeostat.save_state(self._redis, state)
+        except Exception as e:  # noqa: BLE001
+            log.debug("impulse[%s] heartbeat decay failed: %s", self._cfg.domain, e)
 
     async def _evaluate_skip(
         self,

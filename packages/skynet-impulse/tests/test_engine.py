@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
 from unittest.mock import AsyncMock
 
@@ -14,18 +15,33 @@ from skynet_impulse.signals import Signal
 
 
 class FakeBus:
-    """Minimal async bus -- drains whatever the test seeded."""
+    """Minimal async bus -- drains whatever the test seeded.
+
+    Supports ``block_ms`` kwarg to mimic the real ``XREADGROUP BLOCK``:
+    when the queue is empty and ``block_ms > 0`` the drain sleeps for
+    that long and returns an empty list (emulating the timeout). That
+    lets ``run_forever`` tests exercise the heartbeat path deterministically
+    by seeding a batch, letting it drain instantly, then letting the
+    subsequent call time out.
+    """
 
     def __init__(self, signals: list[Signal] | None = None):
         self._signals = list(signals or [])
+        self._drain_calls = 0
 
     async def ensure_consumer_group(self, **_kw):
         return None
 
-    async def drain_signals(self, *args, **kwargs):
-        out = [(f"id-{i}", s) for i, s in enumerate(self._signals)]
-        self._signals = []
-        return out
+    async def drain_signals(self, *args, block_ms: int | None = None, **kwargs):
+        self._drain_calls += 1
+        if self._signals:
+            out = [(f"id-{i}", s) for i, s in enumerate(self._signals)]
+            self._signals = []
+            return out
+        if block_ms:
+            # Mimic Redis blocking drain: sleep for block_ms then return [].
+            await asyncio.sleep(block_ms / 1000.0)
+        return []
 
     async def ack_signals(self, *args, **kwargs):
         return 0
@@ -258,3 +274,199 @@ async def test_tick_records_fire_for_rate_limit():
     await engine.tick()
     remaining_after = engine.state().rate_limit_remaining
     assert remaining_after == 1
+
+
+# ---- Signal-driven run_forever + heartbeat ------------------------------
+
+@pytest.mark.asyncio
+async def test_run_forever_wakes_on_signal_and_processes():
+    """A seeded signal should drive a full process + gate + compose."""
+    bus = FakeBus([Signal(kind="novelty", source="analyzer", salience=0.9, anchor="X")])
+    redis = FakeRedis()
+    engine, gate, compose = _make_engine(bus=bus, redis=redis)
+    await engine.start()
+    for v in [0.1] * 10:
+        engine._baseline.append_history(redis, v)
+
+    stop = asyncio.Event()
+
+    async def _stop_after_process():
+        # Wait briefly for the first batch to be drained + processed.
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if gate.should_fire.await_count > 0:
+                break
+        stop.set()
+
+    task = asyncio.create_task(
+        engine.run_forever(heartbeat_seconds=5, batch_size=5, stop_event=stop)
+    )
+    await _stop_after_process()
+    try:
+        await asyncio.wait_for(task, timeout=2)
+    except asyncio.TimeoutError:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    assert gate.should_fire.await_count == 1
+    assert compose.compose.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_run_forever_heartbeat_on_timeout_does_not_call_gate():
+    """With no signals, run_forever must hit the heartbeat path, not the gate."""
+    bus = FakeBus([])  # empty
+    redis = FakeRedis()
+    engine, gate, compose = _make_engine(bus=bus, redis=redis)
+    await engine.start()
+
+    stop = asyncio.Event()
+
+    async def _cancel_after_two_heartbeats():
+        # Wait long enough for at least one block-timeout-then-heartbeat cycle.
+        # block_ms = heartbeat_seconds*1000, so keep heartbeat small.
+        await asyncio.sleep(0.15)
+        stop.set()
+
+    task = asyncio.create_task(
+        engine.run_forever(heartbeat_seconds=0.05, batch_size=5, stop_event=stop)
+    )
+    await _cancel_after_two_heartbeats()
+    try:
+        await asyncio.wait_for(task, timeout=1)
+    except asyncio.TimeoutError:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    # No signals = no gate/compose calls.
+    assert gate.should_fire.await_count == 0
+    assert compose.compose.await_count == 0
+    # But the bus should have been drained at least once.
+    assert bus._drain_calls >= 1
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_decays_drives_without_running_gate():
+    """Direct unit test: _heartbeat decays drive state and nothing else."""
+    bus = FakeBus([])
+    redis = FakeRedis()
+    engine, gate, compose = _make_engine(bus=bus, redis=redis)
+    await engine.start()
+
+    # Seed a drive above 0 so decay can be observed.
+    state = engine._homeostat.load_state(redis)
+    state.set("curiosity", 0.8)
+    engine._homeostat.save_state(redis, state)
+
+    engine._heartbeat()
+
+    after = engine._homeostat.load_state(redis)
+    assert after.get("curiosity") < 0.8  # decayed
+    assert gate.should_fire.await_count == 0
+    assert compose.compose.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_refractory_counts_signal_events_not_wall_clock():
+    """Refractory should count down on each signal-processing call, not time.
+
+    This is the logical-time property: two ``_process_signals`` calls
+    decrement refractory twice; wall-clock waits alone do nothing.
+    """
+    bus = FakeBus([])
+    redis = FakeRedis()
+    engine, _, _ = _make_engine(bus=bus, redis=redis)
+    await engine.start()
+
+    # Set up a refractory at cap (=4 after 4 bumps).
+    for _ in range(4):
+        engine._baseline.bump_refractory(redis, "A")
+    before = engine._baseline.remaining_refractory(redis, "A")
+
+    # Heartbeat must NOT touch refractories.
+    engine._heartbeat()
+    assert engine._baseline.remaining_refractory(redis, "A") == before
+
+    # Each _process_signals decrements refractories by 1.
+    await engine._process_signals([])
+    after_one = engine._baseline.remaining_refractory(redis, "A")
+    assert after_one == before - 1
+
+    await engine._process_signals([])
+    after_two = engine._baseline.remaining_refractory(redis, "A")
+    assert after_two == before - 2
+
+
+@pytest.mark.asyncio
+async def test_run_forever_processes_multiple_signal_bursts():
+    """Seed two bursts; both must end up processed through the gate."""
+    bus = FakeBus([Signal(kind="novelty", source="analyzer", salience=0.9, anchor="A")])
+    redis = FakeRedis()
+    engine, gate, compose = _make_engine(bus=bus, redis=redis, rate_limit=5)
+    await engine.start()
+    for v in [0.1] * 10:
+        engine._baseline.append_history(redis, v)
+
+    stop = asyncio.Event()
+
+    async def _feed_second_burst_then_stop():
+        # Wait for first burst to clear.
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if gate.should_fire.await_count >= 1:
+                break
+        bus.seed([Signal(kind="novelty", source="analyzer", salience=0.9, anchor="B")])
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if gate.should_fire.await_count >= 2:
+                break
+        stop.set()
+
+    task = asyncio.create_task(
+        engine.run_forever(heartbeat_seconds=0.05, batch_size=5, stop_event=stop)
+    )
+    await _feed_second_burst_then_stop()
+    try:
+        await asyncio.wait_for(task, timeout=2)
+    except asyncio.TimeoutError:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    assert gate.should_fire.await_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_engine_config_back_compat_heartbeat_default():
+    """An EngineConfig not setting heartbeat_seconds still validates."""
+    cfg = EngineConfig(
+        domain="bc",
+        drives=[Drive("x")],
+        signal_to_drive=[SignalToDrive("novelty", "x", 0.3)],
+    )
+    cfg.validate()
+    assert cfg.heartbeat_seconds == 3600
+    assert cfg.batch_size == 10
+
+
+@pytest.mark.asyncio
+async def test_engine_config_rejects_zero_heartbeat():
+    """heartbeat_seconds must be strictly positive."""
+    from skynet_impulse.exceptions import ConfigError
+
+    cfg = EngineConfig(
+        domain="bc",
+        drives=[Drive("x")],
+        signal_to_drive=[SignalToDrive("novelty", "x", 0.3)],
+        heartbeat_seconds=0,
+    )
+    with pytest.raises(ConfigError):
+        cfg.validate()

@@ -75,7 +75,7 @@ from .signals import (
     ensure_consumer_group,
 )
 
-__version__ = "2026.4.19"
+__version__ = "2026.4.20"
 
 __all__ = [
     "__version__",
