@@ -25,6 +25,7 @@ skynet-postgres = { workspace = true }
 skynet-mcp = { workspace = true }
 skynet-vibe = { workspace = true }
 skynet-providers = { workspace = true }
+skynet-capture = { workspace = true }
 
 [dependency-groups]
 dev = [
