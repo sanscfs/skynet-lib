@@ -278,6 +278,7 @@ async def test_tick_records_fire_for_rate_limit():
 
 # ---- Signal-driven run_forever + heartbeat ------------------------------
 
+
 @pytest.mark.asyncio
 async def test_run_forever_wakes_on_signal_and_processes():
     """A seeded signal should drive a full process + gate + compose."""
@@ -298,9 +299,7 @@ async def test_run_forever_wakes_on_signal_and_processes():
                 break
         stop.set()
 
-    task = asyncio.create_task(
-        engine.run_forever(heartbeat_seconds=5, batch_size=5, stop_event=stop)
-    )
+    task = asyncio.create_task(engine.run_forever(heartbeat_seconds=5, batch_size=5, stop_event=stop))
     await _stop_after_process()
     try:
         await asyncio.wait_for(task, timeout=2)
@@ -331,9 +330,7 @@ async def test_run_forever_heartbeat_on_timeout_does_not_call_gate():
         await asyncio.sleep(0.15)
         stop.set()
 
-    task = asyncio.create_task(
-        engine.run_forever(heartbeat_seconds=0.05, batch_size=5, stop_event=stop)
-    )
+    task = asyncio.create_task(engine.run_forever(heartbeat_seconds=0.05, batch_size=5, stop_event=stop))
     await _cancel_after_two_heartbeats()
     try:
         await asyncio.wait_for(task, timeout=1)
@@ -428,9 +425,7 @@ async def test_run_forever_processes_multiple_signal_bursts():
                 break
         stop.set()
 
-    task = asyncio.create_task(
-        engine.run_forever(heartbeat_seconds=0.05, batch_size=5, stop_event=stop)
-    )
+    task = asyncio.create_task(engine.run_forever(heartbeat_seconds=0.05, batch_size=5, stop_event=stop))
     await _feed_second_burst_then_stop()
     try:
         await asyncio.wait_for(task, timeout=2)

@@ -321,8 +321,12 @@ class ImpulseEngine:
         log.info(
             "impulse[%s] engine waiting for signals on stream=%s group=%s "
             "consumer=%s heartbeat_seconds=%d batch_size=%d",
-            cfg.domain, cfg.stream_name, cfg.consumer_group, cfg.consumer_name,
-            hb, batch,
+            cfg.domain,
+            cfg.stream_name,
+            cfg.consumer_group,
+            cfg.consumer_name,
+            hb,
+            batch,
         )
 
         while True:
