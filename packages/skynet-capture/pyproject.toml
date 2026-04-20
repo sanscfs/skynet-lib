@@ -1,6 +1,6 @@
 [project]
 name = "skynet-capture"
-version = "2026.4.24"
+version = "2026.4.25"
 description = "Shared ingest library: LLM-backed consumption extraction + Postgres pool helpers used by skynet-profiler, skynet-music, skynet-movies to turn natural-language Matrix messages into structured PG/Qdrant rows."
 requires-python = ">=3.12"
 dependencies = []
