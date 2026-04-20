@@ -43,12 +43,19 @@ import asyncio
 import logging
 import random
 import uuid
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from .archetypes import Archetype, ArchetypeBandit
 from .baseline import AdaptiveBaseline, BaselineConfig
+from .calibration import (
+    HALF_LIFE_PRIOR_FRACTION,
+    PERSIST_EVERY_N_SIGNALS,
+    CalibrationPersistence,
+    HalfLifeCalibrator,
+)
 from .compose import ComposeClient
 from .drives import Drive, DriveState, SignalToDrive
 from .exceptions import ConfigError
@@ -84,6 +91,16 @@ class EngineConfig:
     cold_start_threshold: float = 0.35
     baseline_min_history: int = 30
     # Refractory
+    #
+    # DEPRECATED as of 2026.4.21: adaptive calibration learns its own
+    # half-life via a two-speed EMA over observed anchor-repeat gaps
+    # (see ``calibration.py``). Setting this field now emits a
+    # ``DeprecationWarning`` and has no effect on the adaptive cooldown;
+    # the constant only survives as back-compat for legacy baseline
+    # unit tests that still import it directly.
+    #
+    # ``refractory_cap_signals`` is a reserved alias; if it ever becomes
+    # a distinct tunable it will share the same deprecation path.
     refractory_cap_ticks: int = 4
     mentions_cap: int = 32
     # Firing rate
@@ -143,6 +160,20 @@ class EngineConfig:
             raise ConfigError("heartbeat_seconds must be > 0")
         if self.batch_size <= 0:
             raise ConfigError("batch_size must be > 0")
+        if self.refractory_cap_ticks != 4:
+            # Only warn when the caller overrode the historical default.
+            # The adaptive calibrator ignores this value entirely -- the
+            # effective cooldown comes from the learned half-life. Kept
+            # for back-compat with older consumer configs still passing
+            # the field explicitly.
+            warnings.warn(
+                "EngineConfig.refractory_cap_ticks is deprecated as of "
+                "skynet-impulse 2026.4.21. The adaptive two-speed EMA "
+                "calibrator learns an effective half-life automatically; "
+                "this value is ignored. See calibration.py for details.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
 
 @dataclass
@@ -166,7 +197,14 @@ class TickResult:
 
 @dataclass
 class EngineState:
-    """Diagnostic snapshot of the engine -- safe to expose on /healthz."""
+    """Diagnostic snapshot of the engine -- safe to expose on /healthz.
+
+    ``half_life`` and ``active_penalties`` were added in 2026.4.21 as
+    part of the adaptive calibration work. ``active_refractories`` is
+    kept for back-compat but will be empty for pods running the new
+    code since the tick-based refractory is no longer bumped (it's only
+    still read on the slim chance of mid-upgrade leftover data).
+    """
 
     drives: dict[str, float]
     baseline_p75: float
@@ -174,6 +212,32 @@ class EngineState:
     rate_limit_remaining: int
     last_fire: Optional[datetime]
     active_refractories: list[tuple[str, int]]
+    half_life: dict[str, float | int | None] = field(default_factory=dict)
+    active_penalties: dict[str, float] = field(default_factory=dict)
+
+    def half_life_human(self) -> str:
+        """One-liner for /vibe/status / !vibe-status.
+
+        Empty string when the calibration block is missing (older
+        engines or serialisation loss) so callers can string-concat
+        without guarding.
+        """
+        if not self.half_life:
+            return ""
+        hl = self.half_life.get("effective")
+        fast = self.half_life.get("h_fast")
+        slow = self.half_life.get("h_slow")
+        obs = self.half_life.get("observations")
+        if hl is None or fast is None or slow is None or obs is None:
+            return ""
+        disagreement_pct = int(round(float(self.half_life.get("disagreement", 0.0)) * 100))
+        if obs == 0:
+            return f"half-life: {float(hl):.0f} signals (fast={float(fast):.0f}, slow={float(slow):.0f}, cold start)"
+        return (
+            f"half-life: {float(hl):.0f} signals "
+            f"(fast={float(fast):.0f}, slow={float(slow):.0f}, blend={disagreement_pct}%)\n"
+            f"{int(obs)} anchor-repeat observations accumulated"
+        )
 
 
 # --- The engine ------------------------------------------------------------
@@ -218,6 +282,13 @@ class ImpulseEngine:
                 mentions_cap=config.mentions_cap,
             )
         )
+        # Adaptive calibration: the prior half-life is a small fraction
+        # of ``baseline_window`` -- by convention the window holds ~1
+        # week of ticks, and 5% of that is a decent default cooldown
+        # before we've observed anything.
+        prior_half_life = max(1.0, float(config.baseline_window) * HALF_LIFE_PRIOR_FRACTION)
+        self._calibration_persistence = CalibrationPersistence(prefix=config.key_prefix)
+        self._calibration = HalfLifeCalibrator(prior=prior_half_life)
         self._history: list[TickResult] = []
         self._history_cap = 100
         self._started = False
@@ -225,7 +296,7 @@ class ImpulseEngine:
     # ---- Lifecycle --------------------------------------------------------
 
     async def start(self) -> None:
-        """Ensure consumer group exists + load the baseline into Redis-visible state.
+        """Ensure consumer group exists + rehydrate calibration from Redis.
 
         Idempotent; calling twice is a no-op.
         """
@@ -245,10 +316,39 @@ class ImpulseEngine:
             # continue; if it's something worse the first drain_signals will
             # surface it.
             log.debug("start(): ensure_consumer_group said: %s", e)
+
+        # Rehydrate calibration state so pod restarts don't lose the
+        # learned half-life. On cold start the loader returns a default
+        # CalibrationState (prior = baseline_window * fraction).
+        prior = max(1.0, float(self._cfg.baseline_window) * HALF_LIFE_PRIOR_FRACTION)
+        try:
+            state = self._calibration_persistence.load(self._redis, prior=prior)
+            self._calibration = HalfLifeCalibrator(prior=prior, state=state)
+            log.info(
+                "impulse[%s] calibration loaded: h_fast=%.1f h_slow=%.1f "
+                "global_signal_count=%d observations=%d penalties=%d",
+                self._cfg.domain,
+                state.h_fast,
+                state.h_slow,
+                state.global_signal_count,
+                state.observations,
+                len(state.penalties),
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "impulse[%s] calibration load failed (%s); using defaults",
+                self._cfg.domain,
+                e,
+            )
+
         self._started = True
 
     async def stop(self) -> None:
-        """Currently a no-op (state is all in Redis). Here for symmetry."""
+        """Persist calibration state on graceful shutdown."""
+        try:
+            self._calibration_persistence.save(self._redis, self._calibration.state)
+        except Exception as e:  # noqa: BLE001
+            log.debug("impulse[%s] calibration save on stop failed: %s", self._cfg.domain, e)
         self._started = False
 
     # ---- Main tick --------------------------------------------------------
@@ -407,6 +507,28 @@ class ImpulseEngine:
         self._homeostat.apply_decay(state, pushed_drives=pushed)
         self._baseline.tick_refractories(self._redis)
 
+        # Feed every signal (anchored or not) into the calibrator so
+        # (a) the signal counter advances -- one unit of logical time
+        #     per signal event, and
+        # (b) anchor-repeat gaps feed both EMAs immediately.
+        # Decay penalties AFTER observation but BEFORE the fire gate so
+        # the penalty we consult is "post-decay for this event".
+        for sig in signals:
+            self._calibration.observe_signal(sig.anchor)
+        self._calibration.decay_penalties()
+
+        # Persist calibration state on a cheap cadence (every N signals)
+        # so pod restarts don't lose the learned half-life. Failures are
+        # logged and swallowed -- they must never block signal processing.
+        if (
+            self._calibration.global_signal_count > 0
+            and self._calibration.global_signal_count % PERSIST_EVERY_N_SIGNALS == 0
+        ):
+            try:
+                self._calibration_persistence.save(self._redis, self._calibration.state)
+            except Exception as e:  # noqa: BLE001
+                log.debug("impulse[%s] calibration save failed: %s", self._cfg.domain, e)
+
         # Track the freshest inbound signal so staleness checks work even
         # across process restarts (state lives in Redis).
         if signals:
@@ -495,6 +617,20 @@ class ImpulseEngine:
         result.message = message
         result.rec_id = uuid.uuid4().hex[:12]
         self._record_fire(now)
+        if top_anchor:
+            # Adaptive penalty: full block (=1.0) decays at the learned
+            # half-life. Supersedes the old ``bump_refractory`` integer
+            # countdown. Persist immediately so a pod restart right after
+            # a fire still remembers the penalty.
+            self._calibration.assign_full_penalty(top_anchor)
+            try:
+                self._calibration_persistence.save(self._redis, self._calibration.state)
+            except Exception as e:  # noqa: BLE001
+                log.debug(
+                    "impulse[%s] calibration save after fire failed: %s",
+                    self._cfg.domain,
+                    e,
+                )
 
         self._homeostat.save_state(self._redis, state)
         self._record(result)
@@ -508,6 +644,10 @@ class ImpulseEngine:
         remaining = self._cfg.rate_limit_per_day - self._recent_fire_count()
         last = self._latest_fire_time()
         refractories = self._baseline.list_active_refractories(self._redis)
+        half_life_diag = self._calibration.diagnostics()
+        # Defensive copy: callers should never mutate the engine's
+        # penalty dict through the diagnostic snapshot.
+        active_penalties = dict(self._calibration.state.penalties)
         return EngineState(
             drives=drive_state.to_dict(),
             baseline_p75=p75,
@@ -515,6 +655,8 @@ class ImpulseEngine:
             rate_limit_remaining=max(0, remaining),
             last_fire=last,
             active_refractories=refractories,
+            half_life=half_life_diag,
+            active_penalties=active_penalties,
         )
 
     def history(self, n: int = 20) -> list[TickResult]:
@@ -634,8 +776,16 @@ class ImpulseEngine:
         if self._recent_fire_count() >= cfg.rate_limit_per_day:
             return "rate_limit"
 
-        # Refractory on the top-anchor.
+        # Continuous penalty gate: replaces the legacy tick-countdown
+        # refractory with an exponential decay at the learned half-life.
+        # We still consult the old refractory hash as a belt-and-braces
+        # fallback for pods mid-upgrade (where the old data may still
+        # exist in Redis from before 2026.4.21); the adaptive penalty
+        # is the primary mechanism.
         if top_anchor:
+            penalty_val = self._calibration.penalty_for(top_anchor)
+            if self._calibration.is_under_penalty(top_anchor):
+                return f"penalty:{penalty_val:.2f}"
             remaining = self._baseline.remaining_refractory(self._redis, top_anchor)
             if remaining > 0:
                 return f"refractory:{remaining}"
