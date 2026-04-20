@@ -156,6 +156,34 @@ class MusicCapture:
         )
 
     @classmethod
+    async def populate_album_tracks(
+        cls,
+        pool: PoolLike,
+        *,
+        album_id: int,
+        artist_id: Optional[int],
+        track_titles: list[str],
+    ) -> int:
+        """Upsert track catalogue entries for an album without creating listens.
+
+        Called after an album-level listen to back-fill the tracks table with
+        the full tracklist fetched from MusicBrainz.  No listen rows are
+        created — this is catalogue enrichment only.
+
+        Returns the number of tracks inserted/updated.
+        """
+        count = 0
+        for title in track_titles:
+            if not title.strip():
+                continue
+            track_id = await cls.upsert_track(pool, title, album_id)
+            if artist_id is not None:
+                await cls.link_track_artist(pool, track_id, artist_id)
+            count += 1
+        log.debug("populate_album_tracks: album_id=%s tracks=%s", album_id, count)
+        return count
+
+    @classmethod
     async def persist(
         cls,
         pool: PoolLike,

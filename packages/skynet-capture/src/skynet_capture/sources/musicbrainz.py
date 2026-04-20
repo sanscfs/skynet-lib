@@ -55,6 +55,41 @@ class MusicBrainzSource:
         resp.raise_for_status()
         return resp.json()
 
+    async def fetch_tracklist(self, release_group_mbid: str) -> list[str]:
+        """Return track titles for the primary release of a release group.
+
+        Performs two MB API calls (rate-limited):
+          1. ``release-group/{mbid}?inc=releases`` → pick first release
+          2. ``release/{release_mbid}?inc=recordings`` → extract track titles
+        Returns an empty list on any error.
+        """
+        try:
+            rg_data = await self._get(f"release-group/{release_group_mbid}", {"inc": "releases"})
+        except Exception as exc:
+            log.debug("fetch_tracklist: release-group lookup failed for %s: %s", release_group_mbid, exc)
+            return []
+
+        releases = rg_data.get("releases") or []
+        if not releases:
+            return []
+        release_id = releases[0].get("id") or ""
+        if not release_id:
+            return []
+
+        try:
+            rel_data = await self._get(f"release/{release_id}", {"inc": "recordings"})
+        except Exception as exc:
+            log.debug("fetch_tracklist: release lookup failed for %s: %s", release_id, exc)
+            return []
+
+        titles: list[str] = []
+        for medium in rel_data.get("media") or []:
+            for track in medium.get("tracks") or []:
+                title = (track.get("recording") or {}).get("title") or track.get("title") or ""
+                if title:
+                    titles.append(title)
+        return titles
+
     async def search(self, query: str, *, year: int | None = None, limit: int = 5) -> list[Candidate]:
         q = query.strip()
         if not q:
