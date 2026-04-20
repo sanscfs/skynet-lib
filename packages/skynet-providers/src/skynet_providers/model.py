@@ -55,21 +55,21 @@ _TIER_ORDER: list[str] = ["small", "medium", "big"]
 _TIER_DEFAULTS: dict[str, dict[str, str]] = {
     "big": {
         "default_provider": "mistral",
-        "mistral":     "mistral-large-latest",
-        "local":       "gemma3:27b",
-        "openrouter":  "mistralai/mistral-large-2512",
+        "mistral": "mistral-large-latest",
+        "local": "gemma3:27b",
+        "openrouter": "mistralai/mistral-large-2512",
     },
     "medium": {
         "default_provider": "mistral",
-        "mistral":     "mistral-medium-latest",
-        "local":       "qwen3:14b",
-        "openrouter":  "mistralai/mistral-medium-3",
+        "mistral": "mistral-medium-latest",
+        "local": "qwen3:14b",
+        "openrouter": "mistralai/mistral-medium-3",
     },
     "small": {
         "default_provider": "local",
-        "mistral":     "mistral-nemo-2407",
-        "local":       "qwen3:1.7b",
-        "openrouter":  "mistralai/mistral-nemo",
+        "mistral": "mistral-nemo-2407",
+        "local": "qwen3:1.7b",
+        "openrouter": "mistralai/mistral-nemo",
     },
 }
 
@@ -287,8 +287,11 @@ class LLMClient:
 
         ep = self.endpoint()
         return chat_completion(
-            prompt, model=ep.model, api_url=ep.base_url,
-            api_key=ep.api_key or None, **kwargs,
+            prompt,
+            model=ep.model,
+            api_url=ep.base_url,
+            api_key=ep.api_key or None,
+            **kwargs,
         )
 
     async def complete(self, prompt: str, **kwargs) -> str:
@@ -297,8 +300,11 @@ class LLMClient:
 
         ep = self.endpoint()
         return await async_chat_completion(
-            prompt, model=ep.model, api_url=ep.base_url,
-            api_key=ep.api_key or None, **kwargs,
+            prompt,
+            model=ep.model,
+            api_url=ep.base_url,
+            api_key=ep.api_key or None,
+            **kwargs,
         )
 
 
