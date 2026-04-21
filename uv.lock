@@ -1761,7 +1761,7 @@ dev = [
 
 [[package]]
 name = "skynet-matrix"
-version = "2026.4.20.5"
+version = "2026.4.21"
 source = { editable = "packages/skynet-matrix" }
 dependencies = [
     { name = "httpx" },
