@@ -34,10 +34,11 @@ def _build_payload(
     temperature: float,
     max_tokens: int,
     extra: dict[str, Any] | None,
+    messages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
-        "messages": _build_messages(prompt, system),
+        "messages": messages if messages is not None else _build_messages(prompt, system),
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
@@ -146,6 +147,7 @@ async def async_chat_completion(
     timeout: float = 60.0,
     api_key: str | None = None,
     extra: dict[str, Any] | None = None,
+    messages: list[dict[str, Any]] | None = None,
     fallback_model: str | None = None,
     fallback_api_url: str | None = None,
     fallback_api_key: str | None = None,
@@ -163,7 +165,7 @@ async def async_chat_completion(
     """
     key = _resolve_key(api_url, api_key)
     headers = {"Authorization": f"Bearer {key}"} if key else {}
-    payload = _build_payload(prompt, system, model, temperature, max_tokens, extra)
+    payload = _build_payload(prompt, system, model, temperature, max_tokens, extra, messages)
 
     try:
         return await _post_chat(
@@ -190,6 +192,7 @@ async def async_chat_completion(
             temperature,
             max_tokens,
             extra,
+            messages,
         )
         return await _post_chat(
             url=fallback_api_url,

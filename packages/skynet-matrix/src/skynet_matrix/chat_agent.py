@@ -46,6 +46,9 @@ ToolDispatch = Callable[[str, dict[str, Any]], Awaitable[Any]]
 # Async adapter around ``/chat/completions``. Receives ``system`` and
 # ``user`` strings and returns the raw assistant content.
 LLMCaller = Callable[[str, str], Awaitable[str]]
+# History-aware variant: also receives the pre-built messages list so the
+# caller can pass a multi-turn context window to the LLM.
+HistoryLLMCaller = Callable[[str, str, "list[dict[str, Any]]"], Awaitable[str]]
 
 
 _DEFAULT_SYSTEM = """You help the user manage {scope}. \
@@ -97,6 +100,18 @@ class ChatAgent:
     # the LLM-parsed intent. Default ``None`` preserves silence-is-default;
     # services that want the bot to acknowledge a failed action opt in.
     tool_error_template: Optional[str] = None
+    # --- Optional conversation history -----------------------------------
+    # When set, ChatAgent maintains per-room history in Redis and passes
+    # it to the LLM so context carries across messages.
+    # Provide all three or none; mixing is silently degraded.
+    #
+    # history_loader(room_id, thread_root) -> list of {"role","content"}
+    # history_appender(room_id, role, content, thread_root) -> None
+    # history_llm_call(system, user, messages) -> str
+    #   (same as llm_call but receives pre-built multi-turn messages list)
+    history_loader: Optional[Callable[[str, Optional[str]], list[dict[str, Any]]]] = None
+    history_appender: Optional[Callable[[str, str, str, Optional[str]], None]] = None
+    history_llm_call: Optional[HistoryLLMCaller] = None
     _started_at: float = field(default_factory=time.time, init=False, repr=False)
 
     async def handle(self, event: Any, body: str) -> Optional[Any]:
@@ -131,9 +146,23 @@ class ChatAgent:
                     )
                     return None
 
+        room_id: str = getattr(event, "room_id", "") or ""
+
         system = self._render_system()
+        history: list[dict[str, Any]] = []
+        if self.history_loader and room_id:
+            history = self.history_loader(room_id, None)
+
         try:
-            raw = await self.llm_call(system, body)
+            if history and self.history_llm_call:
+                messages = [
+                    {"role": "system", "content": system},
+                    *history,
+                    {"role": "user", "content": body},
+                ]
+                raw = await self.history_llm_call(system, body, messages)
+            else:
+                raw = await self.llm_call(system, body)
         except Exception as exc:  # noqa: BLE001
             logger.warning("chat_agent LLM call failed: %s", exc)
             return None
@@ -146,12 +175,18 @@ class ChatAgent:
 
         tool_name = decision.get("tool")
         if tool_name:
-            return await self._call_tool(tool_name, decision)
+            response = await self._call_tool(tool_name, decision)
+        else:
+            reply = decision.get("reply")
+            response = reply.strip() if isinstance(reply, str) and reply.strip() else None
 
-        reply = decision.get("reply")
-        if isinstance(reply, str) and reply.strip():
-            return reply.strip()
-        return None
+        if self.history_appender and room_id and response is not None:
+            self.history_appender(room_id, "user", body, None)
+            resp_text = _render_result(response)
+            if resp_text:
+                self.history_appender(room_id, "assistant", resp_text, None)
+
+        return response
 
     # -- Internals -------------------------------------------------------
 
@@ -229,4 +264,4 @@ def _render_result(result: Any) -> str:
     return str(result)
 
 
-__all__ = ["ChatAgent", "ToolSchema", "ToolDispatch", "LLMCaller"]
+__all__ = ["ChatAgent", "ToolSchema", "ToolDispatch", "LLMCaller", "HistoryLLMCaller"]
