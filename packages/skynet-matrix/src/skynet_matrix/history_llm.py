@@ -60,9 +60,7 @@ def build_conv_history(
     CONV_MAX_MESSAGES env var, default 40).
     """
 
-    async def history_llm_call(
-        system: str, user: str, messages: list[dict[str, Any]]
-    ) -> str:
+    async def history_llm_call(system: str, user: str, messages: list[dict[str, Any]]) -> str:
         return await async_chat_completion(
             prompt=user,
             messages=messages,
@@ -82,9 +80,7 @@ def build_conv_history(
     def loader(room_id: str, thread_root: Optional[str]) -> list[dict]:
         return conv_load(room_id, thread_root, max_messages=max_context_messages)
 
-    def appender(
-        room_id: str, role: str, content: str, thread_root: Optional[str]
-    ) -> None:
+    def appender(room_id: str, role: str, content: str, thread_root: Optional[str]) -> None:
         conv_append(room_id, role, content, thread_root=thread_root)
 
     return history_llm_call, loader, appender

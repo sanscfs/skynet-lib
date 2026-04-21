@@ -455,8 +455,7 @@ class PrototypeRegistry:
             full_payload = payload if "name" in payload else {**payload, "name": name}
             self._prototypes[name] = DomainPrototype.from_dict(full_payload)
         self._training_embeddings = {
-            k: [list(row) for row in v]
-            for k, v in data.get("training_embeddings", {}).items()
+            k: [list(row) for row in v] for k, v in data.get("training_embeddings", {}).items()
         }
         self.tau = float(data.get("tau", self.DEFAULT_TAU))
         self._ready.set()
