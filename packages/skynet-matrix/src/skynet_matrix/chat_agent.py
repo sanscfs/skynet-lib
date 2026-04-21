@@ -33,10 +33,15 @@ from __future__ import annotations
 import json
 import logging
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
 logger = logging.getLogger("skynet_matrix.chat_agent")
+
+# Accumulates tool names dispatched within the current handle() call.
+# Read this after awaiting handle() to get the list for footers/logging.
+last_tools_used: ContextVar[list[str]] = ContextVar("last_tools_used", default=[])
 
 # A tool schema in the shape ``{"name", "description", "inputSchema"}``.
 ToolSchema = dict[str, Any]
@@ -55,10 +60,14 @@ _DEFAULT_SYSTEM = """You help the user manage {scope}. \
 User writes in Ukrainian, bot is ``{bot_name}``.
 
 Return ONLY valid JSON — no markdown, no prose:
-- Tool call:  {{"tool": "<name>", "args": {{...}}, "reply": "<1-2 sentence Ukrainian ack>"}}
-- Reply only: {{"reply": "<short Ukrainian reply>"}}
-- Silent:     {{"silent": true}}
+- Multiple actions (use when user mentions several items at once):
+  {{"tools": [{{"tool": "<name>", "args": {{...}}}}, ...], "reply": "<1-2 sentence Ukrainian ack covering all items>"}}
+- Single action:
+  {{"tool": "<name>", "args": {{...}}, "reply": "<1-2 sentence Ukrainian ack>"}}
+- Reply only:    {{"reply": "<short Ukrainian reply>"}}
+- Silent:        {{"silent": true}}
 
+IMPORTANT: When the user mentions multiple albums/tracks/artists in one message, call the tool ONCE PER ENTITY (use "tools" array). Do NOT collapse them into one call.
 Silence is default. Use tools only when intent clearly matches description. No emojis unless the user used one.
 
 Available tools:
@@ -148,6 +157,9 @@ class ChatAgent:
 
         room_id: str = getattr(event, "room_id", "") or ""
 
+        # Reset per-call tool tracker
+        tok = last_tools_used.set([])
+
         system = self._render_system()
         history: list[dict[str, Any]] = []
         if self.history_loader and room_id:
@@ -165,20 +177,39 @@ class ChatAgent:
                 raw = await self.llm_call(system, body)
         except Exception as exc:  # noqa: BLE001
             logger.warning("chat_agent LLM call failed: %s", exc)
+            last_tools_used.reset(tok)
             return None
 
         decision = _parse_decision(raw)
         if decision is None:
             logger.info("chat_agent: LLM returned non-JSON (silent): %r", raw[:200])
+            last_tools_used.reset(tok)
             return None
         if decision.get("silent") is True:
             logger.info("chat_agent: LLM chose silence for %r", body[:80])
+            last_tools_used.reset(tok)
             return None
 
-        tool_name = decision.get("tool")
-        if tool_name:
-            logger.info("chat_agent: dispatching tool=%r", tool_name)
-            response = await self._call_tool(tool_name, decision)
+        # Collect tool calls: support both {"tool": "..."} and {"tools": [...]}
+        tool_calls: list[dict[str, Any]] = []
+        if "tools" in decision and isinstance(decision["tools"], list):
+            tool_calls = [tc for tc in decision["tools"] if isinstance(tc, dict) and tc.get("tool")]
+        elif decision.get("tool"):
+            tool_calls = [decision]
+
+        if tool_calls:
+            tool_results: list[str] = []
+            for tc in tool_calls:
+                name = tc.get("tool", "")
+                logger.info("chat_agent: dispatching tool=%r", name)
+                result = await self._call_tool(name, tc)
+                last_tools_used.get().append(name)
+                text = _render_result(result)
+                if text:
+                    tool_results.append(text)
+            top_reply = (decision.get("reply") or "").strip()
+            combined = "\n".join(filter(None, [top_reply] + tool_results))
+            response: Optional[Any] = combined or None
         else:
             reply = decision.get("reply")
             response = reply.strip() if isinstance(reply, str) and reply.strip() else None
@@ -189,6 +220,7 @@ class ChatAgent:
             if resp_text:
                 self.history_appender(room_id, "assistant", resp_text, None)
 
+        last_tools_used.reset(tok)
         return response
 
     # -- Internals -------------------------------------------------------
@@ -267,4 +299,4 @@ def _render_result(result: Any) -> str:
     return str(result)
 
 
-__all__ = ["ChatAgent", "ToolSchema", "ToolDispatch", "LLMCaller", "HistoryLLMCaller"]
+__all__ = ["ChatAgent", "ToolSchema", "ToolDispatch", "LLMCaller", "HistoryLLMCaller", "last_tools_used"]
