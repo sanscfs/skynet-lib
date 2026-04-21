@@ -124,7 +124,7 @@ class ChatAgent:
     history_llm_call: Optional[HistoryLLMCaller] = None
     _started_at: float = field(default_factory=time.time, init=False, repr=False)
 
-    async def handle(self, event: Any, body: str) -> Optional[Any]:
+    async def handle(self, event: Any, body: str, *, thread_root: Optional[str] = None) -> Optional[Any]:
         """``CommandBot.on_text`` entry point. Never raises."""
         body = (body or "").strip()
         if len(body) < self.min_body_chars:
@@ -164,7 +164,7 @@ class ChatAgent:
         system = self._render_system()
         history: list[dict[str, Any]] = []
         if self.history_loader and room_id:
-            history = self.history_loader(room_id, None)
+            history = self.history_loader(room_id, thread_root)
 
         try:
             if history and self.history_llm_call:
@@ -216,10 +216,10 @@ class ChatAgent:
             response = reply.strip() if isinstance(reply, str) and reply.strip() else None
 
         if self.history_appender and room_id and response is not None:
-            self.history_appender(room_id, "user", body, None)
+            self.history_appender(room_id, "user", body, thread_root)
             resp_text = _render_result(response)
             if resp_text:
-                self.history_appender(room_id, "assistant", resp_text, None)
+                self.history_appender(room_id, "assistant", resp_text, thread_root)
 
         last_tools_used.reset(tok)
         return response

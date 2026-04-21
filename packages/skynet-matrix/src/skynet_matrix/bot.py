@@ -57,7 +57,7 @@ from skynet_matrix.state_events import (
     publish_bot_commands_state,
 )
 
-OnTextCallback = Callable[[Any, str], Awaitable[Optional[Any]]]
+OnTextCallback = Callable[..., Awaitable[Optional[Any]]]
 # (event, thread_root_event_id, body) → reply or None
 OnThreadReplyCallback = Callable[[Any, str, str], Awaitable[Optional[Any]]]
 
@@ -585,7 +585,7 @@ class CommandBot:
                     return
             if self._on_text is not None and room_id and body.strip():
                 try:
-                    result = await self._on_text(event, body)
+                    result = await self._on_text(event, body, thread_root=thread_root_id)
                 except Exception as exc:
                     logger.exception("on_text handler raised: %s", exc)
                     return
