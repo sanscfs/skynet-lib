@@ -1,22 +1,25 @@
 """Tests for :meth:`VibeEngine.match` + τ calibration (v2 API).
 
-These tests deliberately avoid the packaged 50-prototype bank and build
-small synthetic registries so the math is easy to reason about. Offline
-hash embedder comes from conftest.
+match() is now Qdrant-native: it votes cosine-weighted across top-k
+neighbors grouped by extra_payload.source_type. Static prototypes are no
+longer required.
 """
 
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 
 import pytest
 from skynet_vibe import (
+    FacetVectors,
     MatchResult,
     PrototypeRegistry,
-    PrototypeWarmingUpError,
     VibeEngine,
+    VibeSignal,
     VibeStore,
 )
+from skynet_vibe import Source as Src
 
 # ---------------------------------------------------------------------------
 # Fixtures local to this module
@@ -71,52 +74,99 @@ def test_entropy_known_binary() -> None:
 
 
 # ---------------------------------------------------------------------------
-# match() behaviour
+# match() behaviour (Qdrant-native voting)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_match_refuses_when_not_ready(engine) -> None:
-    with pytest.raises(PrototypeWarmingUpError):
-        await engine.match("whatever text we have")
+async def test_match_empty_store_returns_unknown(engine) -> None:
+    """No signals in store -> match returns 'unknown' without raising."""
+    result = await engine.match("whatever text we have")
+    assert isinstance(result, MatchResult)
+    assert result.winner == "unknown"
+    assert result.accepted is False
+    assert result.confidence == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio
 async def test_match_on_training_phrase_accepted(engine) -> None:
-    """A training phrase passed back in must route to its own prototype.
+    """Signals with a matching source_type win the vote.
 
-    The hash-based test embedder is NOT semantic, so identical text ->
-    identical vector -> centroid is the mean of the phrase vectors ->
-    cosine with the own phrase is maximal. Good enough to pin the API.
+    We insert several signals aligned with the query text, all tagged
+    source_type='alpha', plus a few tagged 'beta' with an unrelated vector.
+    The query must route to 'alpha'.
     """
-    await engine.prototypes.add("alpha", ["aaa aaa aaa"])
-    await engine.prototypes.add("beta", ["bbb bbb bbb"])
-    await engine.prototypes.add("gamma", ["ccc ccc ccc"])
-    engine.prototypes.calibrate_tau()
-    engine.prototypes._ready.set()
+    alpha_vec = await engine.embedder("aaa aaa aaa")
+    beta_vec = await engine.embedder("bbb bbb bbb")
+
+    for i in range(5):
+        await engine.store.put(
+            VibeSignal(
+                id=f"alpha-{i}",
+                text_raw="aaa aaa aaa",
+                vectors=FacetVectors(content=list(alpha_vec)),
+                source=Src(type="chat"),
+                timestamp=datetime.now(timezone.utc),
+                confidence=1.0,
+                extra_payload={"source_type": "alpha"},
+            )
+        )
+    for i in range(3):
+        await engine.store.put(
+            VibeSignal(
+                id=f"beta-{i}",
+                text_raw="bbb bbb bbb",
+                vectors=FacetVectors(content=list(beta_vec)),
+                source=Src(type="chat"),
+                timestamp=datetime.now(timezone.utc),
+                confidence=1.0,
+                extra_payload={"source_type": "beta"},
+            )
+        )
 
     result = await engine.match("aaa aaa aaa")
     assert isinstance(result, MatchResult)
     assert result.winner == "alpha"
     assert result.accepted is True
     assert 0.0 <= result.confidence <= 1.0
-    # entropy strictly less than H_max on a training phrase
-    h_max = math.log2(3)
-    assert result.entropy_bits < h_max
+    # entropy strictly less than H_max (two types -> H_max = 1 bit)
+    assert result.entropy_bits < math.log2(2)
 
 
 @pytest.mark.asyncio
 async def test_match_returns_full_distribution(engine) -> None:
-    await engine.prototypes.add("alpha", ["aaa aaa aaa"])
-    await engine.prototypes.add("beta", ["bbb bbb bbb"])
-    engine.prototypes.calibrate_tau()
-    engine.prototypes._ready.set()
+    """Both source_types appear in the distribution; probs sum to 1.
+
+    Use the same base vector for both types so both have positive cosine
+    with the query and neither gets filtered by the zero noise floor.
+    """
+    base_vec = await engine.embedder("aaa aaa aaa")
+
+    for i in range(3):
+        await engine.store.put(
+            VibeSignal(
+                id=f"a-{i}",
+                text_raw="aaa",
+                vectors=FacetVectors(content=list(base_vec)),
+                source=Src(type="chat"),
+                timestamp=datetime.now(timezone.utc),
+                extra_payload={"source_type": "alpha"},
+            )
+        )
+        await engine.store.put(
+            VibeSignal(
+                id=f"b-{i}",
+                text_raw="aaa",
+                vectors=FacetVectors(content=list(base_vec)),
+                source=Src(type="chat"),
+                timestamp=datetime.now(timezone.utc),
+                extra_payload={"source_type": "beta"},
+            )
+        )
 
     result = await engine.match("aaa aaa aaa")
-    # softmax_probs + cosines cover every prototype
     assert set(result.softmax_probs.keys()) == {"alpha", "beta"}
     assert set(result.cosines.keys()) == {"alpha", "beta"}
-    # softmax sums to 1
     assert sum(result.softmax_probs.values()) == pytest.approx(1.0, abs=1e-6)
 
 
@@ -125,9 +175,6 @@ async def test_match_uniform_cosine_rejected(fake_qdrant) -> None:
     """When every cosine is equal, entropy = log2(N) and accepted=False."""
 
     async def uniform_embedder(text: str) -> list[float]:
-        # Identical vector regardless of input -- every centroid is
-        # therefore identical to the query -> cosine = 1 everywhere ->
-        # softmax is uniform -> entropy = log2(N).
         return [1.0] * 8
 
     store = VibeStore(fake_qdrant, collection="t")
@@ -138,21 +185,30 @@ async def test_match_uniform_cosine_rejected(fake_qdrant) -> None:
         embedder=uniform_embedder,
         llm_client=lambda _prompt: "irrelevant",
     )
-    for name in ("a", "b", "c", "d"):
-        await eng.prototypes.add(name, [f"seed-{name}"])
-    eng.prototypes.calibrate_tau()
-    eng.prototypes._ready.set()
+
+    # Insert signals for two types — identical vectors so cosines are equal.
+    for name in ("a", "b"):
+        for i in range(3):
+            await eng.store.put(
+                VibeSignal(
+                    id=f"{name}-{i}",
+                    text_raw=name,
+                    vectors=FacetVectors(content=[1.0] * 8),
+                    source=Src(type="chat"),
+                    timestamp=datetime.now(timezone.utc),
+                    extra_payload={"source_type": name},
+                )
+            )
 
     result = await eng.match("anything goes")
-    # With all cosines equal, softmax is uniform regardless of τ
-    h_max = math.log2(4)
+    h_max = math.log2(2)
     assert result.entropy_bits == pytest.approx(h_max, abs=1e-6)
     assert result.accepted is False
     assert result.confidence == pytest.approx(0.0, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------
-# τ calibration
+# τ calibration (still valid — PrototypeRegistry is still part of the engine)
 # ---------------------------------------------------------------------------
 
 
@@ -203,9 +259,6 @@ async def test_calibrate_tau_target_mean_entropy(engine) -> None:
         return total / len(training)
 
     mh = mean_h(tau)
-    # Hash embedder with tiny 16-d vectors has limited separability,
-    # so we allow a loose tolerance. What we really want to pin:
-    # the calibrated τ is not at either bracket endpoint.
     assert mh == pytest.approx(target, rel=0.25, abs=0.25)
     assert 0.01 < tau < 2.0
 
