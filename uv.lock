@@ -23,6 +23,7 @@ members = [
     "skynet-qdrant",
     "skynet-retrieval",
     "skynet-scoring",
+    "skynet-taste",
     "skynet-vault",
     "skynet-vibe",
 ]
@@ -1676,7 +1677,7 @@ provides-extras = ["fastapi", "httpx", "requests", "redis-otel", "all"]
 
 [[package]]
 name = "skynet-embedding"
-version = "2026.4.2"
+version = "2026.4.21"
 source = { editable = "packages/skynet-embedding" }
 dependencies = [
     { name = "httpx" },
@@ -1840,7 +1841,7 @@ requires-dist = [
 
 [[package]]
 name = "skynet-qdrant"
-version = "2026.4.9"
+version = "2026.4.21"
 source = { editable = "packages/skynet-qdrant" }
 dependencies = [
     { name = "httpx" },
@@ -1860,6 +1861,32 @@ version = "2026.4.13"
 source = { editable = "packages/skynet-scoring" }
 
 [[package]]
+name = "skynet-taste"
+version = "2026.4.25"
+source = { editable = "packages/skynet-taste" }
+dependencies = [
+    { name = "skynet-scoring" },
+    { name = "skynet-vibe" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
+    { name = "skynet-scoring", editable = "packages/skynet-scoring" },
+    { name = "skynet-vibe", editable = "packages/skynet-vibe" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "skynet-vault"
 version = "2026.4.19"
 source = { editable = "packages/skynet-vault" }
@@ -1872,7 +1899,7 @@ requires-dist = [{ name = "hvac", specifier = ">=2.0,<3.0" }]
 
 [[package]]
 name = "skynet-vibe"
-version = "2026.4.22"
+version = "2026.4.25"
 source = { editable = "packages/skynet-vibe" }
 dependencies = [
     { name = "numpy" },

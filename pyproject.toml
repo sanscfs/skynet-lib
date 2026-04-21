@@ -26,6 +26,7 @@ skynet-mcp = { workspace = true }
 skynet-vibe = { workspace = true }
 skynet-providers = { workspace = true }
 skynet-capture = { workspace = true }
+skynet-taste = { workspace = true }
 
 [dependency-groups]
 dev = [
