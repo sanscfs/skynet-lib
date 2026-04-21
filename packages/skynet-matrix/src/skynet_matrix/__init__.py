@@ -3,9 +3,9 @@
 from skynet_matrix.async_client import AsyncMatrixClient
 from skynet_matrix.bot import BotConfig, CommandBot, OnTextCallback, OnThreadReplyCallback
 from skynet_matrix.chat_agent import ChatAgent, HistoryLLMCaller, LLMCaller, ToolDispatch, ToolSchema
-from skynet_matrix.history_llm import build_conv_history
 from skynet_matrix.client import MatrixClient
 from skynet_matrix.commands import Command, parse_command_line
+from skynet_matrix.history_llm import build_conv_history
 from skynet_matrix.state_events import (
     STATE_EVENT_TYPE,
     build_bot_commands_content,
