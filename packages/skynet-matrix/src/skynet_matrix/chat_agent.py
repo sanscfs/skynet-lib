@@ -169,12 +169,15 @@ class ChatAgent:
 
         decision = _parse_decision(raw)
         if decision is None:
+            logger.info("chat_agent: LLM returned non-JSON (silent): %r", raw[:200])
             return None
         if decision.get("silent") is True:
+            logger.info("chat_agent: LLM chose silence for %r", body[:80])
             return None
 
         tool_name = decision.get("tool")
         if tool_name:
+            logger.info("chat_agent: dispatching tool=%r", tool_name)
             response = await self._call_tool(tool_name, decision)
         else:
             reply = decision.get("reply")
