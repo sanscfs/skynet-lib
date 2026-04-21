@@ -590,7 +590,7 @@ class CommandBot:
                     logger.exception("on_text handler raised: %s", exc)
                     return
                 if result is not None:
-                    await self._send_result(room_id, result)
+                    await self._send_result(room_id, result, thread_root=thread_root_id)
             return
 
         cmd_name, args = parsed
