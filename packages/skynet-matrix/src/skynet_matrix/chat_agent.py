@@ -67,7 +67,8 @@ Return ONLY valid JSON — no markdown, no prose:
 - Reply only:    {{"reply": "<short Ukrainian reply>"}}
 - Silent:        {{"silent": true}}
 
-IMPORTANT: When the user mentions multiple albums/tracks/artists in one message, call the tool ONCE PER ENTITY (use "tools" array). Do NOT collapse them into one call.
+IMPORTANT: When the user mentions multiple albums/tracks/artists in one message,
+call the tool ONCE PER ENTITY (use "tools" array). Do NOT collapse them into one call.
 Silence is default. Use tools only when intent clearly matches description. No emojis unless the user used one.
 
 Available tools:
