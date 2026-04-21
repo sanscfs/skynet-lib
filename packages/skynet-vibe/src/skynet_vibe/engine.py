@@ -409,9 +409,12 @@ class VibeEngine:
             )
 
         # Accumulate cosine-weighted votes per source_type.
+        # extra_payload.source_type carries the semantic category
+        # ("music_review", "emotional", etc.); source.type is the
+        # ingestion channel ("matrix") which is meaningless here.
         votes: dict[str, float] = {}
         for n in neighbors:
-            src = n.source.type
+            src = (n.extra_payload or {}).get("source_type") or n.source.type
             sim = cosine(vec, n.vectors.content)
             votes[src] = votes.get(src, 0.0) + sim
 
