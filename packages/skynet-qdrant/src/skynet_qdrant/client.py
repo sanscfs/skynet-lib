@@ -136,6 +136,27 @@ class QdrantClient:
         resp = self._request("POST", f"/collections/{collection}/points/search", body)
         return resp.get("result", [])
 
+    def retrieve_exists(self, collection: str, ids: list[str]) -> set[str]:
+        """Return the subset of ids that already exist in the collection.
+
+        Uses a single POST /points round-trip with no payload/vector data.
+        Returns empty set on any error so callers fall back to full upsert.
+        """
+        if not ids:
+            return set()
+        try:
+            resp = self._request(
+                "POST",
+                f"/collections/{collection}/points",
+                {"ids": ids, "with_payload": False, "with_vector": False},
+                quiet_statuses=(404,),
+            )
+            result = resp.get("result") or []
+            return {str(p["id"]) for p in result if p.get("id") is not None}
+        except Exception as e:
+            logger.warning("retrieve_exists(%s) failed: %s", collection, e)
+            return set()
+
     def scroll(
         self,
         collection: str,
