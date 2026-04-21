@@ -145,11 +145,14 @@ class PrototypeRegistry:
     TAU_MIN: float = 0.01
     TAU_MAX: float = 2.0
 
-    def __init__(self, embedder: Embedder):
+    def __init__(self, embedder: Embedder, concurrency: int = 4):
         self._embedder: Embedder = embedder
         self._prototypes: dict[str, DomainPrototype] = {}
         self._ready: asyncio.Event = asyncio.Event()
         self._warmup_task: asyncio.Task[None] | None = None
+        # Semaphore created lazily (must be in a running event loop).
+        self._concurrency = concurrency
+        self._embed_sem: asyncio.Semaphore | None = None
         # τ and the training-phrase embeddings are populated by
         # calibrate_tau() (called from _warmup). Until then match()
         # should refuse via the `ready` gate.
@@ -197,7 +200,14 @@ class PrototypeRegistry:
             return False
 
     async def _embed_phrases(self, phrases: list[str]) -> list[list[float]]:
-        return list(await asyncio.gather(*[_embed_one(self._embedder, p) for p in phrases]))
+        if self._embed_sem is None:
+            self._embed_sem = asyncio.Semaphore(self._concurrency)
+
+        async def _throttled(phrase: str) -> list[float]:
+            async with self._embed_sem:  # type: ignore[union-attr]
+                return await _embed_one(self._embedder, phrase)
+
+        return list(await asyncio.gather(*[_throttled(p) for p in phrases]))
 
     async def get(self, name: str) -> DomainPrototype:
         try:
@@ -421,6 +431,35 @@ class PrototypeRegistry:
 
     def to_dict(self) -> dict[str, Any]:
         return {name: proto.to_dict() for name, proto in self._prototypes.items()}
+
+    def to_snapshot(self) -> dict[str, Any]:
+        """Full snapshot: centroids + training embeddings + tau.
+
+        Suitable for persistent cache (Redis / disk). On restore via
+        :meth:`load_snapshot` the warmup is skipped entirely — no re-embedding.
+        """
+        return {
+            "tau": self.tau,
+            "prototypes": self.to_dict(),
+            "training_embeddings": {k: list(v) for k, v in self._training_embeddings.items()},
+        }
+
+    def load_snapshot(self, data: dict[str, Any]) -> None:
+        """Restore from a :meth:`to_snapshot` payload.
+
+        Sets ``_ready`` so ``start_warmup`` / ``wait_ready`` are no-ops,
+        and restores ``tau`` + training embeddings so ``calibrate_tau``
+        can re-run deterministically if needed.
+        """
+        for name, payload in data.get("prototypes", {}).items():
+            full_payload = payload if "name" in payload else {**payload, "name": name}
+            self._prototypes[name] = DomainPrototype.from_dict(full_payload)
+        self._training_embeddings = {
+            k: [list(row) for row in v]
+            for k, v in data.get("training_embeddings", {}).items()
+        }
+        self.tau = float(data.get("tau", self.DEFAULT_TAU))
+        self._ready.set()
 
     def load_precomputed(self, data: dict[str, Any]) -> None:
         """Load already-computed centroids (skip embedding). Useful for tests
