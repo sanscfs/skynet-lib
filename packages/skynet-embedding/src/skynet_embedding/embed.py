@@ -53,6 +53,36 @@ def embed(
     return hash_embed(text, dim)
 
 
+def embed_with_tier(
+    text: str,
+    dim: int | None = None,
+    *,
+    ollama_url: str | None = None,
+    ollama_model: str | None = None,
+    api_key: str | None = None,
+    api_url: str | None = None,
+    embedding_model: str | None = None,
+) -> tuple[list[float], str]:
+    """Like embed(), but also returns the tier name that succeeded.
+
+    Returns ``(vector, tier)`` where tier is one of:
+    ``"ollama"`` | ``"openrouter"`` | ``"hash"``.
+    Never raises.
+    """
+    dim = dim or _DEFAULT_DIM
+
+    vec = ollama_embed(text, dim, url=ollama_url, model=ollama_model)
+    if vec is not None:
+        return vec, "ollama"
+
+    vec = openrouter_embed(text, dim, api_key=api_key, api_url=api_url, model=embedding_model)
+    if vec is not None:
+        return vec, "openrouter"
+
+    logger.debug("All embedding providers failed, using hash fallback")
+    return hash_embed(text, dim), "hash"
+
+
 def embed_cached(
     text: str,
     dim: int | None = None,
