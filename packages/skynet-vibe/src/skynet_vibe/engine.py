@@ -1,9 +1,11 @@
 """High-level orchestration entry point.
 
-:class:`VibeEngine` ties together the embedder, the store, the prototype
-registry, and the LLM client into a small surface:
+:class:`VibeEngine` ties together the embedder, the store, and the LLM
+client into a small surface. Domain prototypes are not pre-embedded at
+startup — ``match()`` votes over live Qdrant neighbors, and domain seeds
+are embedded lazily (once per pod lifetime) via :meth:`_domain_seed`.
 
-* :meth:`match` -- entropy-gated prototype classification (v2 API).
+* :meth:`match` -- entropy-gated source_type classification via Qdrant voting.
 * :meth:`absorb` -- capture a text signal from any source.
 * :meth:`absorb_emoji` -- capture an emoji reaction.
 * :meth:`suggest` -- score candidates against the weighted vibe cloud and
@@ -18,16 +20,17 @@ import asyncio
 import json
 import math
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from skynet_scoring import compute_decay_factor_logical
 
 from skynet_vibe.affinity import cosine, signal_weight
 from skynet_vibe.emoji import embed_emoji, phrase_for
-from skynet_vibe.exceptions import EmbeddingError, PrototypeNotFoundError, PrototypeWarmingUpError
+from skynet_vibe.exceptions import EmbeddingError
 from skynet_vibe.explain import describe_current_vibe as _describe_current_vibe
 from skynet_vibe.explain import explain_signal as _explain_signal
-from skynet_vibe.prototypes import PrototypeRegistry
+from skynet_vibe.prototypes import DomainPrototype, PrototypeRegistry
 from skynet_vibe.signals import FacetVectors, Source, VibeSignal
 from skynet_vibe.store import VibeStore
 
@@ -218,6 +221,14 @@ class VibeEngine:
         # lambdas. None -> DEFAULT_LAMBDAS from skynet_scoring (identity
         # immortal, trait slow, episodic medium, raw fast).
         self.decay_lambdas = decay_lambdas
+        # Lazy cache: embed(domain_label) once per pod lifetime.
+        self._domain_cache: dict[str, list[float]] = {}
+
+    async def _domain_seed(self, domain: str) -> list[float]:
+        """Embed ``domain`` label lazily, caching the result for the pod lifetime."""
+        if domain not in self._domain_cache:
+            self._domain_cache[domain] = await _embed(self.embedder, domain)
+        return self._domain_cache[domain]
 
     # ------------------------------------------------------------------
     # Absorb
@@ -364,84 +375,69 @@ class VibeEngine:
         self,
         text: str,
         *,
+        top_k: int = 20,
         embedder: Embedder | None = None,
     ) -> MatchResult:
-        """Classify ``text`` against every registered prototype.
+        """Classify ``text`` by weighted source_type voting over Qdrant neighbors.
 
-        Pipeline:
+        Pipeline (Qdrant-native, no static prototypes):
 
-        1. Embed ``text`` (via ``embedder`` if supplied, else ``self.embedder``).
-        2. Compute cosine against every prototype centroid.
-        3. Softmax over the cosine vector at temperature
-           ``self.prototypes.tau`` (calibrated once at warmup).
-        4. Shannon entropy of the softmax distribution, in bits.
-        5. Accept iff ``H <= H_max / 2`` where ``H_max = log2(N)``.
+        1. Embed ``text``.
+        2. Fetch top-``top_k`` nearest signals from Qdrant (no noise floor).
+        3. Accumulate each neighbor's cosine similarity into its source_type
+           vote bucket.
+        4. L1-normalise votes → probability distribution.
+        5. Shannon entropy in bits. Accept iff ``H <= H_max / 2``.
 
-        The ``τ/H/accepted`` trio replaces the v1 absolute-cosine threshold
-        (``min_score``) + top-2 margin + rolling-window dead code --- see
-        feedback_adaptive_not_hardcoded. The only tunable "knob" that
-        survives is the warmup target mean entropy (``log2(N)/4``), which
-        is a ratio of the theoretical maximum, not a magic constant.
-
-        Raises :class:`PrototypeWarmingUpError` if the registry hasn't
-        finished embedding its prototypes yet. Raises
-        :class:`EmbeddingError` if the embedder returns a bad vector or
-        there are zero registered prototypes.
+        ``winner`` is the source_type with the highest vote share.
+        ``softmax_probs`` is the full distribution; ``cosines`` is the raw
+        accumulated cosine per source_type (for debug). Empty collection
+        returns ``accepted=False`` with zero confidence.
         """
-        if self.prototypes is None:
-            raise EmbeddingError("match() requires a PrototypeRegistry; use process() for the novelty-gated path")
-        if not self.prototypes.ready:
-            raise PrototypeWarmingUpError("prototype warmup in progress; match() not available yet")
-
-        protos = self.prototypes.all()
-        if not protos:
-            raise EmbeddingError("match() called with zero registered prototypes")
-
         active_embedder: Embedder = embedder if embedder is not None else self.embedder
         vec = await _embed(active_embedder, text)
 
-        tau = float(getattr(self.prototypes, "tau", 1.0) or 1.0)
+        neighbors = await self.store.search(vec, top_k=top_k, noise_floor=0.0)
+        if not neighbors:
+            return MatchResult(
+                winner="unknown",
+                confidence=0.0,
+                entropy_bits=0.0,
+                softmax_probs={},
+                cosines={},
+                accepted=False,
+            )
 
-        # Compute cosines and softmax logits in one pass.
-        names: list[str] = []
-        cosines: list[float] = []
-        for p in protos:
-            names.append(p.name)
-            cosines.append(cosine(vec, p.centroid))
+        # Accumulate cosine-weighted votes per source_type.
+        votes: dict[str, float] = {}
+        for n in neighbors:
+            src = n.source.type
+            sim = cosine(vec, n.vectors.content)
+            votes[src] = votes.get(src, 0.0) + sim
 
-        # Numerically stable softmax at temperature tau.
-        logits = [c / tau for c in cosines]
-        max_logit = max(logits)
-        exps = [math.exp(lg - max_logit) for lg in logits]
-        total = sum(exps)
-        if total <= 0.0:
-            # Degenerate: treat as uniform.
-            probs = [1.0 / len(protos)] * len(protos)
+        total_votes = sum(votes.values())
+        n_types = len(votes)
+        if total_votes <= 0.0:
+            probs = {k: 1.0 / n_types for k in votes} if n_types else {}
         else:
-            probs = [e / total for e in exps]
+            probs = {k: v / total_votes for k, v in votes.items()}
 
-        # Shannon entropy in bits (base 2).
+        # Shannon entropy in bits.
         h_bits = 0.0
-        for p_i in probs:
+        for p_i in probs.values():
             if p_i > 1e-12:
                 h_bits -= p_i * math.log2(p_i)
-        h_max = math.log2(len(protos)) if len(protos) > 1 else 1.0
-        confidence = 1.0 - (h_bits / h_max) if h_max > 0 else 0.0
-        # Clamp against float drift.
-        if confidence < 0.0:
-            confidence = 0.0
-        if confidence > 1.0:
-            confidence = 1.0
-
-        winner_idx = max(range(len(probs)), key=lambda i: probs[i])
+        h_max = math.log2(n_types) if n_types > 1 else 1.0
+        confidence = max(0.0, min(1.0, 1.0 - (h_bits / h_max))) if h_max > 0 else 0.0
+        winner = max(probs, key=lambda k: probs[k])
         accepted = h_bits <= (h_max / 2.0)
 
         return MatchResult(
-            winner=names[winner_idx],
+            winner=winner,
             confidence=float(confidence),
             entropy_bits=float(h_bits),
-            softmax_probs={name: float(p) for name, p in zip(names, probs, strict=True)},
-            cosines={name: float(c) for name, c in zip(names, cosines, strict=True)},
+            softmax_probs={k: float(v) for k, v in probs.items()},
+            cosines={k: float(v) for k, v in votes.items()},
             accepted=bool(accepted),
         )
 
@@ -472,9 +468,8 @@ class VibeEngine:
         prototype_centroid: list[float] | None = None
         if domain is not None:
             try:
-                proto = await self.prototypes.get(domain)
-                prototype_centroid = proto.centroid
-            except PrototypeNotFoundError:
+                prototype_centroid = await self._domain_seed(domain)
+            except Exception:
                 prototype_centroid = None
 
         context_vector: list[float] | None = None
@@ -534,9 +529,6 @@ class VibeEngine:
         """
         if not candidates:
             raise ValueError("suggest() requires at least one candidate")
-
-        if not self.prototypes.ready:
-            raise PrototypeWarmingUpError(f"prototype warmup in progress; target domain={domain!r} not yet available")
 
         target, pool = await self._weighted_target(domain=domain, context_text=context_text, pool_size=128)
         if not target:
@@ -614,13 +606,11 @@ class VibeEngine:
         prototype_centroid: list[float] | None = None
         if domain is not None:
             try:
-                proto = await self.prototypes.get(domain)
-                prototype_centroid = proto.centroid
-            except PrototypeNotFoundError:
+                prototype_centroid = await self._domain_seed(domain)
+            except Exception:
                 prototype_centroid = None
 
         if prototype_centroid is None:
-            # Fallback: describe nothing domain-specific
             return await _describe_current_vibe([], self.llm, domain=domain, window_days=window_days)
 
         raw_signals = await self._signal_pool(query_vector=prototype_centroid, top_k=128)
@@ -669,11 +659,17 @@ class VibeEngine:
     ) -> dict[str, Any]:
         """Return the full weight breakdown for ``signal_id``. Pure math."""
         signal = await self.store.get_required(signal_id)
-        prototype = None
+        prototype: DomainPrototype | None = None
         if domain is not None:
             try:
-                prototype = await self.prototypes.get(domain)
-            except PrototypeNotFoundError:
+                seed = await self._domain_seed(domain)
+                prototype = DomainPrototype(
+                    name=domain,
+                    seed_phrases=[domain],
+                    centroid=seed,
+                    last_refreshed=datetime.now(timezone.utc),
+                )
+            except Exception:
                 prototype = None
         context_vector: list[float] | None = None
         if context_text:
