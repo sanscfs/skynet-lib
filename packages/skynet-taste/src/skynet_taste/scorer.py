@@ -42,7 +42,7 @@ def score_candidate(
     if pref_vec is None or beta == 0.0:
         return mood_score
     pref_score = max(0.0, cosine(candidate_vec, pref_vec))
-    return mood_score * (pref_score ** beta)
+    return mood_score * (pref_score**beta)
 
 
 async def rank_candidates(

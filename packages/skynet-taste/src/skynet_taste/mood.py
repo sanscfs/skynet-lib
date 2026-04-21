@@ -99,10 +99,10 @@ async def get_mood_vector(
 
     total_w = sum(weights)
     if total_w > 0:
-        age = sum(
-            w * float((sig.extra_payload or {}).get("missed_opportunities", 0))
-            for sig, w in zip(signals, weights)
-        ) / total_w
+        age = (
+            sum(w * float((sig.extra_payload or {}).get("missed_opportunities", 0)) for sig, w in zip(signals, weights))
+            / total_w
+        )
     else:
         age = 0.0
 
