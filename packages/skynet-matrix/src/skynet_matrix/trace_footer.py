@@ -106,6 +106,44 @@ def format_trace_footer(
     return "\n\n<small>" + " | ".join(parts) + "</small>"
 
 
+def current_trace_id() -> str:
+    """Return the current OpenTelemetry span trace ID (32-char hex) or empty string."""
+    try:
+        from opentelemetry import trace as _otel_trace  # noqa: PLC0415
+
+        span = _otel_trace.get_current_span()
+        ctx = span.get_span_context()
+        if ctx.is_valid:
+            return format(ctx.trace_id, "032x")
+    except Exception:
+        pass
+    return ""
+
+
+def with_trace_footer(
+    text: str,
+    duration_s: float = 0.0,
+    *,
+    tools_used: list[str] | None = None,
+    service: str = "",
+) -> dict:
+    """Wrap plain text into ``{text, html}`` with OTel trace footer appended.
+
+    Reads the current OTel span automatically via :func:`current_trace_id`.
+    Drop-in replacement for the per-service ``tracing.with_trace_footer`` shims.
+    """
+    import html as _html  # noqa: PLC0415
+
+    footer = format_trace_footer(
+        trace_id=current_trace_id(),
+        duration_s=duration_s,
+        tools_used=tools_used or [],
+        service=service,
+    )
+    escaped = _html.escape(text).replace("\n", "<br/>")
+    return {"text": text, "html": escaped + footer}
+
+
 def build_trace_meta(
     trace_id: str,
     prompt_tokens: int = 0,

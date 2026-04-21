@@ -28,7 +28,7 @@ from skynet_matrix.stream_events import (
     parse_xread_response,
     stream_key,
 )
-from skynet_matrix.trace_footer import build_trace_meta, format_trace_footer
+from skynet_matrix.trace_footer import build_trace_meta, current_trace_id, format_trace_footer, with_trace_footer
 from skynet_matrix.wrap import build_edit_payload, build_footer_payload
 
 __all__ = [
@@ -51,6 +51,8 @@ __all__ = [
     "STATE_EVENT_TYPE",
     "format_trace_footer",
     "build_trace_meta",
+    "current_trace_id",
+    "with_trace_footer",
     "build_footer_payload",
     "build_edit_payload",
     "EventType",
