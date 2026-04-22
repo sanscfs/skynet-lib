@@ -221,7 +221,8 @@ class ChatAgent:
             if resp_text:
                 self.history_appender(room_id, "assistant", resp_text, thread_root)
 
-        last_tools_used.reset(tok)
+        # Don't reset — caller reads last_tools_used after we return.
+        # reset(tok) would wipe the list before the caller can see it.
         return response
 
     # -- Internals -------------------------------------------------------
