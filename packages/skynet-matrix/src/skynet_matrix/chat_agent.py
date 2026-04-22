@@ -258,12 +258,10 @@ class ChatAgent:
         if isinstance(result, dict) and result.get("_self_reply"):
             return None
 
-        ack = decision.get("reply")
-        ack = ack.strip() if isinstance(ack, str) and ack.strip() else ""
-        result_text = _render_result(result)
-        if ack and result_text and ack != result_text:
-            return f"{ack}\n\n{result_text}"
-        return ack or result_text or None
+        # Return only the tool result. The LLM `reply` field is handled
+        # by handle() as `top_reply` — including it here causes duplication
+        # when handle() builds combined = top_reply + "\n" + tool_results.
+        return _render_result(result) or None
 
 
 def _parse_decision(raw: str) -> Optional[dict[str, Any]]:
