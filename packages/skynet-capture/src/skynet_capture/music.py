@@ -190,6 +190,7 @@ class MusicCapture:
         *,
         artist: str,
         track: str,
+        album: Optional[str] = None,
         year: Optional[int] = None,
         notes: Optional[str] = None,
         source: str = "chat",
@@ -215,7 +216,8 @@ class MusicCapture:
         if artist_name:
             artist_id = await cls.upsert_artist(pool, artist_name)
 
-        album_id = await cls.upsert_album(pool, track_name, year, artist_id=artist_id)
+        album_title = (album or "").strip() or track_name
+        album_id = await cls.upsert_album(pool, album_title, year, artist_id=artist_id)
         track_id = await cls.upsert_track(pool, track_name, album_id)
         if artist_id is not None:
             await cls.link_track_artist(pool, track_id, artist_id)
@@ -223,10 +225,11 @@ class MusicCapture:
         await pool.execute(
             """
             INSERT INTO listens
-              (track_id, listened_at, source, notes, source_event_id, notes_source)
-            VALUES ($1, $2, $3, $4, $5, $6)
+              (track_id, album_id, listened_at, source, notes, source_event_id, notes_source)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             """,
             track_id,
+            album_id,
             listened_at or datetime.now(timezone.utc),
             source,
             notes or None,
