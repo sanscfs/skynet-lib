@@ -10,11 +10,19 @@ import logging
 from typing import Optional
 
 import redis as redis_sync
+from redis.backoff import ExponentialBackoff
+from redis.retry import Retry
 
 logger = logging.getLogger(__name__)
 
 _sync_client: Optional[redis_sync.Redis] = None
 _async_client = None  # Optional[redis.asyncio.Redis]
+
+# Retry up to 6 times with exponential backoff capped at 30 s.
+# Covers transient outages (pod restarts, network blips) without
+# hot-spinning. Applied to both sync and async clients.
+_RETRY = Retry(ExponentialBackoff(cap=30, base=1), retries=6)
+_RETRY_ERRORS = [ConnectionError, TimeoutError, OSError]
 
 
 def get_redis(
@@ -40,6 +48,8 @@ def get_redis(
         decode_responses=decode_responses,
         socket_timeout=5,
         socket_connect_timeout=5,
+        retry=_RETRY,
+        retry_on_error=_RETRY_ERRORS,
     )
     try:
         _sync_client.ping()
@@ -81,6 +91,8 @@ def get_async_redis(
         decode_responses=decode_responses,
         socket_timeout=socket_timeout,
         socket_connect_timeout=socket_connect_timeout,
+        retry=_RETRY,
+        retry_on_error=_RETRY_ERRORS,
     )
     if not force_new:
         _async_client = client
