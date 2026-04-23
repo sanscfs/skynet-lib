@@ -99,6 +99,50 @@ def get_async_redis(
     return client
 
 
+_RELEASE_LUA = (
+    "if redis.call('get',KEYS[1])==ARGV[1] then "
+    "return redis.call('del',KEYS[1]) else return 0 end"
+)
+
+
+def leader_lock(redis_client: redis_sync.Redis, key: str, ttl: int, holder: str) -> bool:
+    """Acquire a distributed leader lock.  Returns True if this pod is leader.
+
+    Use before periodic background jobs so only one replica runs per interval.
+    TTL should equal the job interval: a crashed pod's lock auto-expires before
+    the next run so another replica can take over without manual cleanup.
+
+    Release early (after job completes) with :func:`release_leader_lock` so
+    the next run starts on time instead of waiting for the full TTL.
+    """
+    return bool(redis_client.set(key, holder, nx=True, ex=ttl))
+
+
+async def async_leader_lock(async_redis, key: str, ttl: int, holder: str) -> bool:
+    """Async variant of :func:`leader_lock`."""
+    return bool(await async_redis.set(key, holder, nx=True, ex=ttl))
+
+
+def release_leader_lock(redis_client: redis_sync.Redis, key: str, holder: str) -> None:
+    """Release a leader lock only if ``holder`` still owns it.
+
+    Uses a Lua compare-and-delete so we never accidentally release a lock
+    that was re-acquired by a different replica after TTL expiry.
+    """
+    try:
+        redis_client.eval(_RELEASE_LUA, 1, key, holder)
+    except Exception:
+        pass
+
+
+async def async_release_leader_lock(async_redis, key: str, holder: str) -> None:
+    """Async variant of :func:`release_leader_lock`."""
+    try:
+        await async_redis.eval(_RELEASE_LUA, 1, key, holder)
+    except Exception:
+        pass
+
+
 def reset() -> None:
     """Close and discard cached clients. Mainly for tests."""
     global _sync_client, _async_client
