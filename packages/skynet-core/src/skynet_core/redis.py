@@ -99,10 +99,7 @@ def get_async_redis(
     return client
 
 
-_RELEASE_LUA = (
-    "if redis.call('get',KEYS[1])==ARGV[1] then "
-    "return redis.call('del',KEYS[1]) else return 0 end"
-)
+_RELEASE_LUA = "if redis.call('get',KEYS[1])==ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end"
 
 
 def leader_lock(redis_client: redis_sync.Redis, key: str, ttl: int, holder: str) -> bool:
