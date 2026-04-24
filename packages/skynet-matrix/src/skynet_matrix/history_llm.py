@@ -78,10 +78,27 @@ def build_conv_history(
         )
 
     def loader(room_id: str, thread_root: Optional[str]) -> list[dict]:
-        return conv_load(room_id, thread_root, max_messages=max_context_messages)
+        """Load unified room history.
+
+        Matrix clients often start a new thread per bot reply, so
+        thread-only history drops cross-thread context (e.g. "again" /
+        "that was great" after a prior recommendation in a different
+        thread). ``appender`` mirrors every message to the main key, so
+        loading main is the complete room timeline regardless of which
+        thread the current message lives in.
+        """
+        return conv_load(room_id, None, max_messages=max_context_messages)
 
     def appender(room_id: str, role: str, content: str, thread_root: Optional[str]) -> None:
-        conv_append(room_id, role, content, thread_root=thread_root)
+        """Append to the main room timeline; mirror into the thread key.
+
+        The thread key is kept populated for backwards-compatible
+        thread-scoped lookups (older callers / UIs), but the canonical
+        conversation history for LLM context is the main key.
+        """
+        conv_append(room_id, role, content, thread_root=None)
+        if thread_root:
+            conv_append(room_id, role, content, thread_root=thread_root)
 
     return history_llm_call, loader, appender
 
