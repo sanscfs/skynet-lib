@@ -153,6 +153,38 @@ async def test_emit_if_live_is_noop_without_stream():
     await emit_if_live(EventType.THINKING, "hello")
 
 
+@pytest.mark.asyncio
+async def test_live_stream_token_streaming():
+    client = _fake_client()
+    async with AsyncLiveStream(client, "!room:t", bot_name="Skynet", typing=False) as stream:
+        await stream.start_llm(url="https://api.mistral.ai/v1", model="mistral-medium-latest")
+        # Feed ~5 tokens quickly — first emit + finish_llm are force-edits,
+        # appends in between obey the 2.5s debounce.
+        for tok in ["hello", " ", "world", "!", " done"]:
+            await stream.append_token(tok)
+        await stream.finish_llm(tokens=5)
+
+    bodies = [c.kwargs["content"]["body"] for c in client.room_send.await_args_list]
+    # Endpoint anchor entry is visible once opened
+    assert any("POST api.mistral.ai" in b for b in bodies)
+    assert any("mistral-medium-latest" in b for b in bodies)
+    # Final body (after finish_llm) no longer carries the live tail block
+    final = bodies[-1]
+    assert "`hello world! done`" not in final
+    # … but the endpoint entry is marked done (✓)
+    assert "✓ → POST api.mistral.ai" in final
+
+
+@pytest.mark.asyncio
+async def test_token_if_live_is_noop_without_stream():
+    from skynet_matrix import emit_llm_end_if_live, emit_llm_start_if_live, emit_token_if_live
+
+    # Without a live stream set — all three helpers must no-op.
+    await emit_llm_start_if_live(url="http://x", model="m")
+    await emit_token_if_live("abc")
+    await emit_llm_end_if_live(tokens=3)
+
+
 # -- CommandBot streaming wrap ---------------------------------------------
 
 

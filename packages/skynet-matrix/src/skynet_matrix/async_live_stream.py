@@ -130,6 +130,14 @@ class AsyncLiveStream:
         self._tools_used: list[str] = []
         self._completed = False
         self._tokens_used = 0
+        # Live LLM buffer (Phase 4: per-token visibility). While a chat
+        # completion is streaming, ``_llm_buffer`` collects the raw
+        # assistant output and the tail is rendered as the last live
+        # line. Cleared on ``finish_llm()``.
+        self._llm_buffer: str = ""
+        self._llm_active: bool = False
+        self._llm_started_at: float = 0.0
+        self._llm_token_preview_chars: int = 160
 
     # -- Lifecycle -------------------------------------------------------
 
@@ -234,6 +242,70 @@ class AsyncLiveStream:
 
         await self._maybe_edit(force=force_edit)
 
+    # -- LLM per-token streaming (Phase 4) --------------------------------
+
+    async def start_llm(self, *, url: str = "", model: str = "") -> None:
+        """Open a live LLM request. Emitted by providers at request start.
+
+        Adds one anchor entry (``POST host model``) and resets the token
+        buffer. The buffer is rendered as a live tail under the entries
+        stack until :meth:`finish_llm` closes the block.
+        """
+        self._llm_buffer = ""
+        self._llm_active = True
+        self._llm_started_at = time.time()
+        host = _host_only(url) if url else "LLM"
+        label = f"POST {host}" + (f" \u00b7 {model}" if model else "")
+        self._entries.append(_LiveEntry(type=EventType.ACTION, text=label, done=False))
+        self._phase += 1
+        await self._write_redis(
+            EventType.ACTION,
+            label,
+            {"kind": "llm_request", "url": url, "model": model},
+        )
+        await self._maybe_edit(force=True)
+
+    async def append_token(self, chunk: str) -> None:
+        """Extend the live LLM buffer with one streamed delta."""
+        if not chunk:
+            return
+        if not self._llm_active:
+            # Token arrived without ``start_llm`` — tolerate it by
+            # opening an anonymous request block so we still render.
+            self._llm_active = True
+            self._llm_started_at = time.time()
+        self._llm_buffer += chunk
+        # Phase bumps per-chunk so the progress cells animate even
+        # while the single LLM entry stays in place.
+        self._phase += 1
+        now = time.time()
+        if now - self._last_edit_at >= self.debounce:
+            body = self._render_body(status="running")
+            await self._edit(body)
+            self._last_edit_at = now
+
+    async def finish_llm(self, *, tokens: int = 0) -> None:
+        """Close the live LLM block — freezes the entry, clears the buffer."""
+        if not self._llm_active:
+            return
+        elapsed = time.time() - self._llm_started_at
+        self._llm_active = False
+        # Bump token usage so the final footer is accurate; if the caller
+        # didn't pass a count, fall back to a whitespace heuristic.
+        self._tokens_used += tokens or _estimate_tokens(self._llm_buffer)
+        for entry in reversed(self._entries):
+            if entry.type == EventType.ACTION and not entry.done:
+                entry.done = True
+                entry.duration_s = elapsed
+                break
+        await self._write_redis(
+            EventType.ACTION_RESULT,
+            f"{len(self._llm_buffer)} chars",
+            {"kind": "llm_response", "duration_s": round(elapsed, 3)},
+        )
+        self._llm_buffer = ""
+        await self._maybe_edit(force=True)
+
     async def complete(
         self,
         *,
@@ -332,9 +404,18 @@ class AsyncLiveStream:
             elif entry.type == EventType.ITERATION:
                 lines.append(f"\u25b8 \U0001f504 {entry.text}".rstrip())
             elif entry.type == EventType.ACTION:
-                lines.append(f"\u25b8 \u2699\ufe0f {entry.text}".rstrip())
+                marker = "\u2713" if entry.done else "\u25b8"
+                arrow = "\u2192"  # →
+                dur = f" \u00b7 {entry.duration_s:.1f}s" if entry.done and entry.duration_s else ""
+                lines.append(f"{marker} {arrow} {entry.text}{dur}".rstrip())
             else:
                 lines.append(f"\u25b8 {entry.text}".rstrip())
+        if self._llm_active and self._llm_buffer:
+            tail = self._llm_buffer[-self._llm_token_preview_chars :]
+            if len(self._llm_buffer) > self._llm_token_preview_chars:
+                tail = "\u2026" + tail
+            tail = tail.replace("\n", " ")
+            lines.append(f"\u25b8 \u23f3 `{tail}`")
         if include_initial and not self._entries:
             lines.append(self.initial_text)
         return "\n".join(lines).rstrip()
@@ -511,8 +592,65 @@ async def emit_if_live(
         logger.debug("emit_if_live(%s) failed: %s", event_type, exc)
 
 
+async def emit_llm_start_if_live(url: str = "", model: str = "") -> None:
+    """Called by skynet-providers at POST /chat/completions start.
+
+    Opens an anchor entry ``→ POST host · model`` in the live view so
+    the user sees which endpoint is being contacted. Safe no-op when
+    streaming is disabled or skynet-matrix isn't wired into the caller.
+    """
+    stream = current_live_stream.get()
+    if stream is None:
+        return
+    try:
+        await stream.start_llm(url=url, model=model)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("emit_llm_start_if_live failed: %s", exc)
+
+
+async def emit_token_if_live(chunk: str) -> None:
+    """Called by skynet-providers for each SSE delta token."""
+    stream = current_live_stream.get()
+    if stream is None:
+        return
+    try:
+        await stream.append_token(chunk)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("emit_token_if_live failed: %s", exc)
+
+
+async def emit_llm_end_if_live(tokens: int = 0) -> None:
+    """Called by skynet-providers once the SSE stream closes."""
+    stream = current_live_stream.get()
+    if stream is None:
+        return
+    try:
+        await stream.finish_llm(tokens=tokens)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("emit_llm_end_if_live failed: %s", exc)
+
+
+def _host_only(url: str) -> str:
+    """Trim a URL to ``host[:port]`` for compact rendering in the live view."""
+    if not url:
+        return ""
+    s = url.split("://", 1)[-1]
+    s = s.split("/", 1)[0]
+    return s
+
+
+def _estimate_tokens(text: str) -> int:
+    """Very rough token estimate (~4 chars per token)."""
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
+
+
 __all__ = [
     "AsyncLiveStream",
     "current_live_stream",
     "emit_if_live",
+    "emit_llm_start_if_live",
+    "emit_token_if_live",
+    "emit_llm_end_if_live",
 ]
