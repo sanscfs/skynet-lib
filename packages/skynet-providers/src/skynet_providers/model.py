@@ -4,8 +4,8 @@ Three-level model selection — each level is optional and narrows the
 previous one:
 
     tier      quality intent:  "big" | "medium" | "small"
-    provider  LLM vendor:      "mistral" | "local" | "openrouter"
-    model     explicit slug:   "mistral-large-latest" | "gemma3:27b" | …
+    provider  LLM vendor:      "phala" | "mistral" | "local" | "openrouter"
+    model     explicit slug:   "z-ai/glm-5.1" | "gemma3:27b" | …
 
 Resolution order (first non-empty wins):
     explicit model + provider
@@ -16,9 +16,9 @@ Redis key schema:
     Value: JSON-encoded ModelOverride
 
 Tier env vars (all readable from skynet-models ConfigMap):
-    TIER_BIG_MISTRAL, TIER_BIG_LOCAL, TIER_BIG_OPENROUTER
-    TIER_MEDIUM_MISTRAL, TIER_MEDIUM_LOCAL, TIER_MEDIUM_OPENROUTER
-    TIER_SMALL_MISTRAL, TIER_SMALL_LOCAL, TIER_SMALL_OPENROUTER
+    TIER_BIG_PHALA, TIER_BIG_LOCAL, TIER_BIG_OPENROUTER, TIER_BIG_MISTRAL
+    TIER_MEDIUM_PHALA, TIER_MEDIUM_LOCAL, TIER_MEDIUM_OPENROUTER, TIER_MEDIUM_MISTRAL
+    TIER_SMALL_PHALA, TIER_SMALL_LOCAL, TIER_SMALL_OPENROUTER, TIER_SMALL_MISTRAL
     TIER_BIG_DEFAULT_PROVIDER, TIER_MEDIUM_DEFAULT_PROVIDER, TIER_SMALL_DEFAULT_PROVIDER
 """
 
@@ -52,25 +52,31 @@ _SLOT_MAX_TIER: dict[str, str] = {"rerank": "small", "hyde": "small"}
 
 _TIER_ORDER: list[str] = ["small", "medium", "big"]
 
-# Hardcoded defaults — overridden by TIER_* env vars from ConfigMap
+# Hardcoded defaults — overridden by TIER_* env vars from ConfigMap.
+# Defaults target Phala TEE (via OpenRouter) because that's the
+# production cloud provider as of the 2026-04 Mistral pause; `mistral`
+# slugs are kept as an escape hatch for the day we un-pause.
 _TIER_DEFAULTS: dict[str, dict[str, str]] = {
     "big": {
-        "default_provider": "mistral",
-        "mistral": "mistral-large-latest",
+        "default_provider": "phala",
+        "phala": "z-ai/glm-5.1",
         "local": "gemma3:27b",
-        "openrouter": "mistralai/mistral-large-2512",
+        "openrouter": "z-ai/glm-5.1",
+        "mistral": "mistral-large-latest",
     },
     "medium": {
-        "default_provider": "mistral",
-        "mistral": "mistral-medium-latest",
+        "default_provider": "phala",
+        "phala": "z-ai/glm-4.7-flash",
         "local": "qwen3:14b",
-        "openrouter": "mistralai/mistral-medium-3",
+        "openrouter": "z-ai/glm-4.7-flash",
+        "mistral": "mistral-medium-latest",
     },
     "small": {
         "default_provider": "local",
-        "mistral": "mistral-nemo-2407",
+        "phala": "google/gemma-3-27b-it",
         "local": "qwen3:1.7b",
-        "openrouter": "mistralai/mistral-nemo",
+        "openrouter": "google/gemma-3-27b-it",
+        "mistral": "mistral-nemo-2407",
     },
 }
 
@@ -113,13 +119,13 @@ def _tier_env(tier: str, provider: str) -> str:
 
 def _tier_default_provider(tier: str) -> str:
     key = f"TIER_{tier.upper()}_DEFAULT_PROVIDER"
-    return os.environ.get(key) or _TIER_DEFAULTS.get(tier, {}).get("default_provider", "mistral")
+    return os.environ.get(key) or _TIER_DEFAULTS.get(tier, {}).get("default_provider", "phala")
 
 
 def resolve_model(
     override: ModelOverride,
     *,
-    fallback_provider: str = "mistral",
+    fallback_provider: str = "phala",
     fallback_model: str = "",
 ) -> tuple[str, str]:
     """Return ``(provider, model)`` from an override.
@@ -261,13 +267,22 @@ class LLMClient:
         No override → fallback_url + fallback_model (env-based).
         Override with tier → resolves from TIER_* env vars in ConfigMap.
         Override with provider+model → fully explicit.
+
+        When no override is set and ``fallback_url`` already routes to
+        OpenRouter (direct or via skynet-cache), the resolver defaults
+        the provider to ``phala`` so production cloud traffic lands in
+        the TEE by default. Operators can still force plain OpenRouter
+        with ``/model openrouter:<slug>`` or pure-local with
+        ``/model local:<slug>``.
         """
         from .override import resolve_endpoint
 
         override = self._refresh_override()
+        low = (self._fallback_url or "").lower()
+        default_provider = "phala" if ("openrouter.ai" in low or "skynet-cache" in low) else ""
         provider, model = resolve_model(
             override,
-            fallback_provider="",
+            fallback_provider=default_provider,
             fallback_model=self._fallback_model,
         )
         return resolve_endpoint(
@@ -282,6 +297,7 @@ class LLMClient:
         from .chat import chat_completion
 
         ep = self.endpoint()
+        kwargs["extra"] = _merge_extra(ep.extra_body, kwargs.get("extra"))
         return chat_completion(
             prompt,
             model=ep.model,
@@ -295,6 +311,7 @@ class LLMClient:
         from .chat import async_chat_completion
 
         ep = self.endpoint()
+        kwargs["extra"] = _merge_extra(ep.extra_body, kwargs.get("extra"))
         return await async_chat_completion(
             prompt,
             model=ep.model,
@@ -302,6 +319,27 @@ class LLMClient:
             api_key=ep.api_key or None,
             **kwargs,
         )
+
+
+def _merge_extra(endpoint_extra: dict | None, caller_extra: dict | None) -> dict | None:
+    """Merge endpoint-injected body fields with caller-supplied ones.
+
+    Endpoint fields come from provider routing (e.g. Phala's
+    ``provider.order`` pin). Caller fields come from the request
+    itself (e.g. ``response_format``). Caller wins on key conflict so
+    per-call overrides still work, which means operator choices like
+    ``/model phala:...`` stay enforced only while the caller doesn't
+    explicitly set the same key.
+    """
+    if not endpoint_extra and not caller_extra:
+        return None
+    if not endpoint_extra:
+        return caller_extra
+    if not caller_extra:
+        return dict(endpoint_extra)
+    merged = dict(endpoint_extra)
+    merged.update(caller_extra)
+    return merged
 
 
 def get_redis_override(redis, component: str, slot: str) -> ModelOverride | None:

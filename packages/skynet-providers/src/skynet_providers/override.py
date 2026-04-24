@@ -10,13 +10,14 @@ Override string format:
 
     ``<provider>:<slug>``
 
-where ``provider`` is one of ``local`` / ``mistral`` / ``openrouter``
-and ``slug`` is whatever model identifier the upstream accepts.
+where ``provider`` is one of ``local`` / ``mistral`` / ``openrouter`` /
+``phala`` and ``slug`` is whatever model identifier the upstream accepts.
 Examples::
 
     local:gemma3:27b                       -> Ollama on the Mac
     mistral:mistral-large-latest           -> Mistral La Plateforme
     openrouter:mistralai/mistral-large-2512 -> OpenRouter via skynet-cache
+    phala:z-ai/glm-5.1                     -> OpenRouter + TEE-pinned to Phala
 
 A bare string without a ``:`` prefix is treated as a legacy cloud slug;
 the caller can still resolve it against its own ``fallback_url``.
@@ -28,6 +29,14 @@ OpenRouter through skynet-cache while another talks direct::
     LLM_LOCAL_URL         default http://100.64.0.4:11434/v1
     MISTRAL_API_URL       default https://api.mistral.ai/v1
     OPENROUTER_API_URL    default http://skynet-cache.skynet-cache.svc:8080/v1
+    PHALA_API_URL         defaults to OPENROUTER_API_URL (same transport)
+
+``phala`` shares OpenRouter's transport and Vault key but forces the
+``provider.order=["phala"]`` routing preference in every request body,
+so OpenRouter pins the call to the Phala TEE endpoint instead of
+auto-selecting any provider that hosts the model. ``allow_fallbacks`` is
+disabled — if Phala can't serve the request we'd rather fail than
+silently leak through a non-TEE provider.
 
 The API key is resolved via :func:`resolve_api_key` (URL substring →
 Vault path) for everything except ``local``, which passes the literal
@@ -37,11 +46,11 @@ string ``"ollama"`` because Ollama doesn't check bearer tokens.
 from __future__ import annotations
 
 import os
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from .resolver import is_local_endpoint, resolve_api_key
 
-VALID_PROVIDERS: tuple[str, ...] = ("local", "mistral", "openrouter")
+VALID_PROVIDERS: tuple[str, ...] = ("local", "mistral", "openrouter", "phala")
 
 _ENDPOINT_DEFAULTS: dict[str, tuple[str, str, str | None]] = {
     # provider -> (env var name, default URL, canned api_key or None for Vault)
@@ -52,6 +61,15 @@ _ENDPOINT_DEFAULTS: dict[str, tuple[str, str, str | None]] = {
         "http://skynet-cache.skynet-cache.svc:8080/v1",
         None,
     ),
+    "phala": (
+        "PHALA_API_URL",
+        "http://skynet-cache.skynet-cache.svc:8080/v1",
+        None,
+    ),
+}
+
+_PHALA_ROUTING: dict[str, Any] = {
+    "provider": {"order": ["phala"], "allow_fallbacks": False},
 }
 
 
@@ -62,6 +80,7 @@ class Endpoint(NamedTuple):
     api_key: str
     model: str
     is_local: bool
+    extra_body: dict[str, Any] | None = None
 
 
 def parse_override(override: str) -> tuple[str, str]:
@@ -113,11 +132,21 @@ def resolve_endpoint(
 
     env_var, default_url, canned_key = _ENDPOINT_DEFAULTS[provider]
     url = os.environ.get(env_var) or default_url
+    # phala rides OpenRouter's transport but pins the call to the Phala
+    # TEE via provider.order. If PHALA_API_URL wasn't set explicitly we
+    # fall through to OPENROUTER_API_URL so operators only have to
+    # configure one base URL.
+    extra_body: dict[str, Any] | None = None
+    if provider == "phala":
+        if not os.environ.get(env_var):
+            url = os.environ.get("OPENROUTER_API_URL") or default_url
+        extra_body = _PHALA_ROUTING
     if canned_key is not None:
-        return Endpoint(url, canned_key, model or fallback_model, True)
+        return Endpoint(url, canned_key, model or fallback_model, True, extra_body)
     return Endpoint(
         url,
         resolve_api_key(url),
         model or fallback_model,
         is_local_endpoint(url),
+        extra_body,
     )
