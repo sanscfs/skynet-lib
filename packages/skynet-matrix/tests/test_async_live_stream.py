@@ -12,7 +12,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from skynet_matrix import (
     AsyncLiveStream,
     CommandBot,

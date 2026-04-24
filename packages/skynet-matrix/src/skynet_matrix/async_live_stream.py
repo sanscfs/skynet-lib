@@ -52,9 +52,7 @@ from skynet_matrix.stream_events import (
 logger = logging.getLogger("skynet_matrix.async_live_stream")
 
 
-current_live_stream: ContextVar[Optional["AsyncLiveStream"]] = ContextVar(
-    "current_live_stream", default=None
-)
+current_live_stream: ContextVar[Optional["AsyncLiveStream"]] = ContextVar("current_live_stream", default=None)
 
 
 _PROGRESS_FILL = "\u25b0"  # ▰
@@ -196,9 +194,7 @@ class AsyncLiveStream:
 
         if event_type == EventType.TOOL_CALL:
             tn = tool_name or md.get("tool_name", "")
-            self._entries.append(
-                _LiveEntry(type=event_type, tool=tn, text=content[:160], done=False)
-            )
+            self._entries.append(_LiveEntry(type=event_type, tool=tn, text=content[:160], done=False))
             if tn and tn not in self._tools_used:
                 self._tools_used.append(tn)
             force_edit = True
@@ -225,9 +221,7 @@ class AsyncLiveStream:
                 )
             force_edit = True
         elif event_type == EventType.ERROR:
-            self._entries.append(
-                _LiveEntry(type=event_type, text=content[:300], done=True)
-            )
+            self._entries.append(_LiveEntry(type=event_type, text=content[:300], done=True))
             force_edit = True
         elif event_type == EventType.THINKING:
             trimmed = (content or "").strip()[:200]
