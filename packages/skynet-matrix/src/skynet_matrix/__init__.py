@@ -1,6 +1,7 @@
 """Skynet Matrix -- Matrix client, stream events, live streaming, command bot."""
 
 from skynet_matrix.async_client import AsyncMatrixClient
+from skynet_matrix.async_live_stream import AsyncLiveStream, current_live_stream, emit_if_live
 from skynet_matrix.bot import BotConfig, CommandBot, OnTextCallback, OnThreadReplyCallback
 from skynet_matrix.chat_agent import ChatAgent, HistoryLLMCaller, LLMCaller, ToolDispatch, ToolSchema
 from skynet_matrix.client import MatrixClient
@@ -34,6 +35,9 @@ from skynet_matrix.wrap import build_edit_payload, build_footer_payload
 __all__ = [
     "MatrixClient",
     "AsyncMatrixClient",
+    "AsyncLiveStream",
+    "current_live_stream",
+    "emit_if_live",
     "CommandBot",
     "OnTextCallback",
     "OnThreadReplyCallback",

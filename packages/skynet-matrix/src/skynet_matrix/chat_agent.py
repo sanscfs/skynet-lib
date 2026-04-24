@@ -37,6 +37,9 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
+from skynet_matrix.async_live_stream import emit_if_live
+from skynet_matrix.stream_events import EventType
+
 logger = logging.getLogger("skynet_matrix.chat_agent")
 
 # Accumulates tool names dispatched within the current handle() call.
@@ -174,6 +177,11 @@ class ChatAgent:
         if self.history_loader and room_id:
             history = self.history_loader(room_id, thread_root)
 
+        # If a live stream is active (CommandBot set one up), notify the
+        # user we're about to call the LLM so the edit shows motion before
+        # the first tool fires. No-op when streaming is disabled.
+        await emit_if_live(EventType.THINKING, "LLM routing \u2026")
+
         try:
             if history and self.history_llm_call:
                 messages = [
@@ -186,6 +194,7 @@ class ChatAgent:
                 raw = await self.llm_call(system, body)
         except Exception as exc:  # noqa: BLE001
             logger.warning("chat_agent LLM call failed: %s", exc)
+            await emit_if_live(EventType.ERROR, f"LLM call failed: {exc}", force_edit=True)
             last_tools_used.reset(tok)
             return None
 
@@ -211,9 +220,26 @@ class ChatAgent:
             for tc in tool_calls:
                 name = tc.get("tool", "")
                 logger.info("chat_agent: dispatching tool=%r", name)
+                args_preview = _args_preview(tc.get("args") or {})
+                await emit_if_live(
+                    EventType.TOOL_CALL,
+                    args_preview,
+                    tool_name=name,
+                    force_edit=True,
+                )
+                t0 = time.perf_counter()
                 result = await self._call_tool(name, tc)
+                dt = time.perf_counter() - t0
                 last_tools_used.get().append(name)
                 text = _render_result(result)
+                preview = (text[:240] + "\u2026") if text and len(text) > 240 else text
+                await emit_if_live(
+                    EventType.TOOL_RESULT,
+                    preview or "",
+                    tool_name=name,
+                    duration_s=dt,
+                    force_edit=True,
+                )
                 if text:
                     tool_results.append(text)
             top_reply = (decision.get("reply") or "").strip()
@@ -291,6 +317,27 @@ def _parse_decision(raw: str) -> Optional[dict[str, Any]]:
         logger.debug("chat_agent: LLM reply not a JSON object: %r", raw[:200])
         return None
     return decision
+
+
+def _args_preview(args: dict[str, Any], *, max_len: int = 80) -> str:
+    """One-line preview of tool args for the live view.
+
+    We format as ``k=v, k=v`` and truncate at ``max_len`` so the live
+    message stays narrow enough to render on mobile.
+    """
+    if not isinstance(args, dict) or not args:
+        return ""
+    parts: list[str] = []
+    for key, val in args.items():
+        if isinstance(val, str):
+            rendered = val if len(val) <= 40 else val[:37] + "\u2026"
+            parts.append(f'{key}="{rendered}"')
+        elif isinstance(val, (int, float, bool)) or val is None:
+            parts.append(f"{key}={val}")
+        else:
+            parts.append(f"{key}=\u2026")
+    out = ", ".join(parts)
+    return out if len(out) <= max_len else out[: max_len - 1] + "\u2026"
 
 
 def _render_result(result: Any) -> str:

@@ -50,12 +50,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
+from skynet_matrix.async_live_stream import AsyncLiveStream, current_live_stream
 from skynet_matrix.chronicle_mirror import get_mirror_client, mirror_message
 from skynet_matrix.commands import Command, HandlerCoro, parse_command_line
 from skynet_matrix.state_events import (
     STATE_EVENT_TYPE,
     publish_bot_commands_state,
 )
+from skynet_matrix.stream_events import EventType
 
 OnTextCallback = Callable[..., Awaitable[Optional[Any]]]
 # (event, thread_root_event_id, body) → reply or None
@@ -95,6 +97,16 @@ class BotConfig:
     state_event_type: str = STATE_EVENT_TYPE
     menu_message_body: Optional[str] = None  # optional pinned menu header
     sync_timeout_ms: int = 30_000
+    # Streaming UX: when ``True`` (default), free-text handlers
+    # (``on_text`` / ``on_thread_reply``) run under an
+    # :class:`AsyncLiveStream`. A placeholder message is posted as soon
+    # as the user's turn starts and edited live with every tool call
+    # while the handler runs; the final edit carries the clean reply.
+    # Command handlers (``!cmd``) are unaffected — they stay one-shot
+    # because their latency is already low.
+    live_stream: bool = True
+    live_stream_bot_name: Optional[str] = None  # default: bot_name
+    live_stream_initial_text: str = "\u25b8 _thinking..._"
 
 
 # -- Menu owner marker used to find & edit our own pinned menu -------------
@@ -128,6 +140,10 @@ class CommandBot:
         sync_timeout_ms: int = 30_000,
         on_text: Optional[OnTextCallback] = None,
         on_thread_reply: Optional[OnThreadReplyCallback] = None,
+        live_stream: bool = True,
+        live_stream_bot_name: Optional[str] = None,
+        live_stream_initial_text: str = "\u25b8 _thinking..._",
+        stream_redis_client: Any = None,
         client: Optional[Any] = None,  # injected for tests
     ) -> None:
         self.config = BotConfig(
@@ -142,7 +158,15 @@ class CommandBot:
             state_event_type=state_event_type,
             menu_message_body=menu_message_body,
             sync_timeout_ms=sync_timeout_ms,
+            live_stream=live_stream,
+            live_stream_bot_name=live_stream_bot_name,
+            live_stream_initial_text=live_stream_initial_text,
         )
+        # Optional Redis client for per-turn stream logging (XADD into a
+        # Redis Stream). When ``None`` the live stream degrades to
+        # Matrix-edit-only (the primary UX anyway); Redis is extra
+        # observability for the rag-atlas / watcher consumers.
+        self._stream_redis = stream_redis_client
 
         self._commands: dict[str, Command] = {}
         self._emoji_commands: dict[str, Command] = {}
@@ -575,22 +599,22 @@ class CommandBot:
         parsed = parse_command_line(body, prefix=self.config.command_prefix)
         if parsed is None:
             if thread_root_id and self._on_thread_reply is not None and room_id and body.strip():
-                try:
-                    result = await self._on_thread_reply(event, thread_root_id, body)
-                except Exception as exc:
-                    logger.exception("on_thread_reply handler raised: %s", exc)
-                    return
-                if result is not None:
-                    await self._send_result(room_id, result, thread_root=thread_root_id)
+                if await self._run_free_text(
+                    event,
+                    room_id=room_id,
+                    thread_root=thread_root_id,
+                    body=body,
+                    is_thread_reply=True,
+                ):
                     return
             if self._on_text is not None and room_id and body.strip():
-                try:
-                    result = await self._on_text(event, body, thread_root=thread_root_id)
-                except Exception as exc:
-                    logger.exception("on_text handler raised: %s", exc)
-                    return
-                if result is not None:
-                    await self._send_result(room_id, result, thread_root=thread_root_id)
+                await self._run_free_text(
+                    event,
+                    room_id=room_id,
+                    thread_root=thread_root_id,
+                    body=body,
+                    is_thread_reply=False,
+                )
             return
 
         cmd_name, args = parsed
@@ -598,6 +622,104 @@ class CommandBot:
             return
 
         await self._dispatch(cmd_name, args, room_id=room_id, event=event)
+
+    async def _run_free_text(
+        self,
+        event: Any,
+        *,
+        room_id: str,
+        thread_root: Optional[str],
+        body: str,
+        is_thread_reply: bool,
+    ) -> bool:
+        """Invoke the free-text handler (optionally under a live stream).
+
+        Returns ``True`` when a reply was produced (used by the caller to
+        short-circuit the fallback from ``on_thread_reply`` to ``on_text``).
+        """
+        handler = self._on_thread_reply if is_thread_reply else self._on_text
+        if handler is None:
+            return False
+
+        async def _invoke() -> Any:
+            if is_thread_reply:
+                # thread-reply signature: (event, thread_root, body)
+                assert thread_root is not None
+                return await handler(event, thread_root, body)  # type: ignore[misc]
+            return await handler(event, body, thread_root=thread_root)  # type: ignore[misc]
+
+        # Non-streaming path keeps the pre-streaming behaviour intact so
+        # anyone opting out via ``live_stream=False`` sees the same one-shot
+        # send path that predates streaming.
+        if not self.config.live_stream or self._client is None:
+            try:
+                result = await _invoke()
+            except Exception as exc:
+                logger.exception("free-text handler raised: %s", exc)
+                return False
+            if result is None:
+                return False
+            await self._send_result(room_id, result, thread_root=thread_root)
+            return True
+
+        bot_name = self.config.live_stream_bot_name or self.config.bot_name or "Skynet"
+        stream = AsyncLiveStream(
+            nio_client=self._client,
+            room_id=room_id,
+            thread_root=thread_root,
+            bot_name=bot_name,
+            redis_client=self._stream_redis,
+            initial_text=self.config.live_stream_initial_text,
+        )
+
+        async with stream:
+            tok = current_live_stream.set(stream)
+            try:
+                try:
+                    result = await _invoke()
+                except Exception as exc:
+                    logger.exception("free-text handler raised: %s", exc)
+                    await stream.emit(
+                        EventType.ERROR,
+                        f"{type(exc).__name__}: {exc}"[:300],
+                        force_edit=True,
+                    )
+                    return False
+            finally:
+                current_live_stream.reset(tok)
+
+            if result is None:
+                # Stay silent — collapse the live placeholder into a short
+                # "done" header so the user sees the turn closed without
+                # an extra message in the room.
+                await stream.complete()
+                return False
+
+            final_text, final_html = self._result_to_text_html(result)
+            await stream.complete(final_text=final_text, html_body=final_html)
+
+            if final_text:
+                self._mirror_out(
+                    room_id=room_id,
+                    body=final_text,
+                    event_id=stream.event_id or "",
+                )
+            return True
+
+    @staticmethod
+    def _result_to_text_html(result: Any) -> tuple[Optional[str], Optional[str]]:
+        """Normalise the variety of shapes a free-text handler may return."""
+        if result is None:
+            return None, None
+        if isinstance(result, str):
+            return result, None
+        if isinstance(result, dict):
+            text = result.get("text")
+            html = result.get("html")
+            if isinstance(text, str) and text:
+                return text, html if isinstance(html, str) else None
+            return None, None
+        return str(result), None
 
     async def handle_reaction_event(self, room: Any, event: Any) -> None:
         """Route an ``m.reaction`` on our pinned menu to the matching cmd."""
