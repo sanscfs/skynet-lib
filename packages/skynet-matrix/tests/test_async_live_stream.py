@@ -270,3 +270,61 @@ async def test_silent_handler_still_closes_stream():
 
     # Placeholder got sent and then edited to a "done" state; no crash.
     assert client.room_send.await_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_re_edits_on_silence():
+    """With no events, the heartbeat should still edit every N seconds."""
+    import asyncio as _asyncio
+
+    client = _fake_client()
+    async with AsyncLiveStream(
+        client,
+        "!room:t",
+        bot_name="Skynet",
+        typing=False,
+        heartbeat_seconds=0.05,  # tight for test
+    ):
+        # Let the heartbeat fire a few times while we do nothing.
+        await _asyncio.sleep(0.25)
+
+    # Initial send + at least one heartbeat edit + final complete edit
+    assert client.room_send.await_count >= 3
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_does_not_fire_on_busy_turn():
+    """When events keep firing, heartbeat should stay idle (no extra sends)."""
+    import asyncio as _asyncio
+
+    client = _fake_client()
+    async with AsyncLiveStream(
+        client,
+        "!room:t",
+        bot_name="Skynet",
+        typing=False,
+        heartbeat_seconds=0.1,
+        debounce_seconds=0.0,  # every emit edits
+    ) as stream:
+        for i in range(3):
+            await stream.emit(EventType.TOOL_CALL, "", tool_name=f"t{i}")
+            await _asyncio.sleep(0.05)  # shorter than heartbeat_seconds
+
+    # 1 placeholder + 3 tool_call edits + final = 5. Heartbeat should NOT fire
+    # because `_last_edit_at` gets refreshed inside the silence window.
+    assert client.room_send.await_count <= 7
+
+
+@pytest.mark.asyncio
+async def test_complete_silent_turn_redacts_placeholder():
+    """Regression guard: silent-turn cleanup must leave zero artefacts."""
+    client = _fake_client()
+    client.room_redact = AsyncMock(return_value=None)
+    stream = AsyncLiveStream(client, "!room:t", bot_name="Skynet", typing=False)
+    await stream.start()
+    await stream.complete()  # silent — no final_text, no entries
+
+    client.room_redact.assert_awaited_once()
+    # Only the initial placeholder was sent; complete() redacted it instead
+    # of editing to a "done" header.
+    assert client.room_send.await_count == 1

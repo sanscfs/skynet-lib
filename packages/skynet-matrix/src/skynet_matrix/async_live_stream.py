@@ -106,6 +106,7 @@ class AsyncLiveStream:
         initial_text: str = "\u25b8 _thinking..._",
         typing: bool = True,
         max_entries_rendered: int = 12,
+        heartbeat_seconds: float = 3.0,
     ) -> None:
         self.client = nio_client
         self.room_id = room_id
@@ -120,6 +121,12 @@ class AsyncLiveStream:
         self.initial_text = initial_text
         self.typing_enabled = typing
         self.max_entries_rendered = max_entries_rendered
+        # Heartbeat: when > ``heartbeat_seconds`` passes without any other
+        # edit, a background task bumps the progress bar + elapsed timer
+        # so the user sees motion even when the LLM call or a tool are
+        # silently in-flight. Set to 0 to disable.
+        self.heartbeat_seconds = heartbeat_seconds
+        self._heartbeat_task: Optional[asyncio.Task[None]] = None
 
         self._event_id: Optional[str] = None
         self._entries: list[_LiveEntry] = []
@@ -175,7 +182,41 @@ class AsyncLiveStream:
                 logger.debug("room_typing at start failed", exc_info=True)
         body = self._render_body(status="running", include_initial=True)
         self._event_id = await self._send_new(body)
+        # Record the placeholder send as an "edit" so the heartbeat
+        # doesn't fire immediately — it only kicks in after the first
+        # silence window of ``heartbeat_seconds``.
+        self._last_edit_at = time.time()
+        if self.heartbeat_seconds > 0 and self._event_id is not None:
+            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         return self._event_id
+
+    async def _heartbeat_loop(self) -> None:
+        """Keep the live message visibly moving during long silent waits.
+
+        Only re-edits when nothing else has touched the message in the
+        last ``heartbeat_seconds`` window, so a chatty turn never hits
+        the heartbeat (and the Matrix homeserver never sees back-to-back
+        edits from both paths). Silent turns (LLM 10s thinking, slow
+        tool) get a bumped progress bar + refreshed elapsed timer every
+        heartbeat tick, which is the only thing the user sees move.
+        """
+        interval = self.heartbeat_seconds
+        try:
+            while not self._completed:
+                await asyncio.sleep(interval)
+                if self._completed:
+                    return
+                silence = time.time() - self._last_edit_at
+                if silence < interval:
+                    continue
+                self._phase += 1
+                body = self._render_body(status="running")
+                await self._edit(body)
+                self._last_edit_at = time.time()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("heartbeat loop crashed: %s", exc)
 
     # -- Emit ------------------------------------------------------------
 
@@ -237,6 +278,10 @@ class AsyncLiveStream:
                 self._entries[-1].text = trimmed
             else:
                 self._entries.append(_LiveEntry(type=event_type, text=trimmed))
+                # Fresh THINKING entry → anchor so the user sees the first
+                # reasoning line as soon as it arrives; subsequent THINKING
+                # updates (same entry overwritten) ride the debounce.
+                force_edit = True
         else:
             self._entries.append(_LiveEntry(type=event_type, text=content[:200]))
 
@@ -326,6 +371,13 @@ class AsyncLiveStream:
         if self._completed:
             return
         self._completed = True
+        # Stop the heartbeat first so we don't race with the final edit.
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         elapsed = duration_s if duration_s is not None else (time.time() - self._started_at)
         self._tokens_used = tokens or self._tokens_used
         used = tools_used if tools_used is not None else self._tools_used
