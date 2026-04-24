@@ -315,7 +315,14 @@ class AsyncLiveStream:
         tokens: int = 0,
         tools_used: Optional[list[str]] = None,
     ) -> None:
-        """Final edit — either a clean reply + footer or the last live body."""
+        """Final edit — either a clean reply + footer or the last live body.
+
+        When ``final_text`` is None *and* the handler never emitted any
+        intermediate tool/LLM events, the placeholder is redacted instead
+        of edited to a "done" header — a silent turn must produce zero
+        visible messages, otherwise a batch of no-op replays at startup
+        spams the room with bare status bars.
+        """
         if self._completed:
             return
         self._completed = True
@@ -337,6 +344,10 @@ class AsyncLiveStream:
             return
 
         if final_text is None:
+            if not self._entries:
+                # Nothing happened — remove the placeholder entirely.
+                await self._redact_placeholder()
+                return
             body = self._render_body(status="done", elapsed=elapsed)
             await self._edit(body)
         else:
@@ -457,6 +468,22 @@ class AsyncLiveStream:
                 logger.warning("AsyncLiveStream send failed room=%s: %s", self.room_id, exc)
                 return None
             return getattr(resp, "event_id", None)
+
+    async def _redact_placeholder(self) -> None:
+        """Redact the initial placeholder event (silent-turn cleanup)."""
+        if self._event_id is None:
+            return
+        try:
+            redact = getattr(self.client, "room_redact", None)
+            if redact is None:
+                return
+            await redact(
+                room_id=self.room_id,
+                event_id=self._event_id,
+                reason="skynet: silent turn — no content",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("redact placeholder failed: %s", exc)
 
     async def _edit(self, body: str, *, html: Optional[str] = None) -> None:
         if self._event_id is None:

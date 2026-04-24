@@ -1,6 +1,6 @@
 [project]
 name = "skynet-matrix"
-version = "2026.4.24.5"
+version = "2026.4.24.6"
 description = "Skynet Matrix client, stream events, live streaming, and slash-command bot framework"
 requires-python = ">=3.12"
 dependencies = [
