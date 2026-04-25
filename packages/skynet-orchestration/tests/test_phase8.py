@@ -479,6 +479,42 @@ def test_composite_falls_back_when_judge_returns_none(redis):
     assert 5000 <= est.tokens_needed <= 7000
 
 
+def test_agent_client_configure_llm_judge_swaps_estimator(redis):
+    """Calling ``configure_llm_judge`` replaces the default estimator
+    with one that consults the LLM judge first."""
+    from skynet_orchestration import AgentClient
+
+    http = _FakeHttp(
+        {
+            "tokens_needed": 12345,
+            "tool_calls_expected": 7,
+            "time_ms": 11000,
+            "confidence": 0.6,
+            "complexity": "medium",
+        }
+    )
+    client = AgentClient(
+        caller_name="test",
+        redis_client=redis,
+        target_registry={"sre": "http://x"},
+    )
+    # Before wiring: structural fallback (small).
+    pre = client.estimate_query("sre", "investigate")
+    assert pre.tokens_needed < 5000
+
+    client.configure_llm_judge(url="http://test/estimate", http_client=http)
+    post = client.estimate_query("sre", "investigate")
+    # After wiring: judge response (12345 tokens) blended with
+    # structural (~800-1500). Result should be markedly larger than
+    # the structural-only baseline because the judge is the only
+    # opinion in the room (history is empty).
+    assert post.tokens_needed > pre.tokens_needed
+    # Empty URL disables it.
+    client.configure_llm_judge(url="")
+    again = client.estimate_query("sre", "investigate")
+    assert again.tokens_needed == pre.tokens_needed
+
+
 def test_coerce_work_estimate_clamps_invalid_complexity():
     out = _coerce_work_estimate(
         {

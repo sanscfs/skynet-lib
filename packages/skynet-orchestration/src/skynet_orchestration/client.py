@@ -214,6 +214,69 @@ class AgentClient:
 
         return structural_fallback(query)
 
+    def configure_llm_judge(
+        self,
+        *,
+        url: str,
+        http_client: Optional[object] = None,
+        timeout: float = 4.0,
+        similarity_fn: Optional[Callable[[str, str], float]] = None,
+    ) -> None:
+        """Wire an :class:`LLMJudgeEstimator` into the call estimator.
+
+        The judge is consulted *per target* — each call's ``target``
+        becomes the JSON ``target`` field on the POST body — so one
+        client + one URL covers every target the caller talks to.
+
+        On any failure (judge returns ``None``, network error,
+        history empty) the composite falls back to the structural
+        estimator. ``url=""`` disables the judge.
+        """
+        from .calibration import load_history
+        from .estimator import CompositeEstimator, LLMJudgeEstimator
+
+        if not url:
+            self.estimate_query = self._default_estimate
+            return
+
+        if http_client is None:
+            http_client = httpx.Client(timeout=timeout)
+
+        # The composite needs a similarity_fn to score history. When
+        # the caller doesn't supply one we use a token-Jaccard so the
+        # judge still works in isolation; production callers should
+        # pass the real cosine fn.
+        if similarity_fn is None:
+
+            def _jaccard(a: str, b: str) -> float:
+                ta = set((a or "").lower().split())
+                tb = set((b or "").lower().split())
+                if not ta or not tb:
+                    return 0.0
+                return len(ta & tb) / len(ta | tb)
+
+            similarity_fn = _jaccard
+
+        def _estimator(target: str, query: str) -> WorkEstimate:
+            judge = LLMJudgeEstimator(
+                url=url,
+                target=target,
+                http_client=http_client,
+                timeout=timeout,
+            )
+            try:
+                history = load_history(self._redis, target)
+            except Exception:  # noqa: BLE001
+                history = []
+            composite = CompositeEstimator(
+                similarity_fn=similarity_fn,
+                history=history,
+                caller_estimator=judge,
+            )
+            return composite.estimate(query)
+
+        self.estimate_query = _estimator
+
 
 # ---------------------------------------------------------------------------
 # Per-call helpers (used inside a server handler)
