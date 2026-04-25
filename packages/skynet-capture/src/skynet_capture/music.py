@@ -135,7 +135,8 @@ class MusicCapture:
         """
         if yt_video_id and len(yt_video_id) == 11:
             row = await pool.fetchrow(
-                "SELECT id FROM tracks WHERE yt_video_id = $1", yt_video_id,
+                "SELECT id FROM tracks WHERE yt_video_id = $1",
+                yt_video_id,
             )
             if row is not None:
                 if album_id is not None:
@@ -143,28 +144,31 @@ class MusicCapture:
                     # never overwrite a previously-resolved album.
                     await pool.execute(
                         "UPDATE tracks SET album_id = COALESCE(album_id, $1) WHERE id = $2",
-                        album_id, row["id"],
+                        album_id,
+                        row["id"],
                     )
                 return row["id"]
             # Pseudo row may exist for the same title from an older chat
             # scrobble — promote it so we don't end up with a duplicate.
             pseudo = _pseudo_yt_id(title)
             pseudo_row = await pool.fetchrow(
-                "SELECT id FROM tracks WHERE yt_video_id = $1", pseudo,
+                "SELECT id FROM tracks WHERE yt_video_id = $1",
+                pseudo,
             )
             if pseudo_row is not None:
                 try:
                     await pool.execute(
-                        "UPDATE tracks SET yt_video_id = $1, "
-                        "album_id = COALESCE(album_id, $2) "
-                        "WHERE id = $3",
-                        yt_video_id, album_id, pseudo_row["id"],
+                        "UPDATE tracks SET yt_video_id = $1, album_id = COALESCE(album_id, $2) WHERE id = $3",
+                        yt_video_id,
+                        album_id,
+                        pseudo_row["id"],
                     )
                     return pseudo_row["id"]
                 except Exception:
                     # Concurrent insert won the race for the real ID. Re-query.
                     row = await pool.fetchrow(
-                        "SELECT id FROM tracks WHERE yt_video_id = $1", yt_video_id,
+                        "SELECT id FROM tracks WHERE yt_video_id = $1",
+                        yt_video_id,
                     )
                     if row is not None:
                         return row["id"]
@@ -175,7 +179,9 @@ class MusicCapture:
                 ON CONFLICT (yt_video_id) DO UPDATE SET title = EXCLUDED.title
                 RETURNING id
                 """,
-                title, yt_video_id, album_id,
+                title,
+                yt_video_id,
+                album_id,
             )
             return row["id"]
 
@@ -286,7 +292,10 @@ class MusicCapture:
         album_title = (album or "").strip() or track_name
         album_id = await cls.upsert_album(pool, album_title, year, artist_id=artist_id)
         track_id = await cls.upsert_track(
-            pool, track_name, album_id, yt_video_id=yt_video_id,
+            pool,
+            track_name,
+            album_id,
+            yt_video_id=yt_video_id,
         )
         if artist_id is not None:
             await cls.link_track_artist(pool, track_id, artist_id)
