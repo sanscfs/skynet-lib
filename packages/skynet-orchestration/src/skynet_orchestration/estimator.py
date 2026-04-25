@@ -27,11 +27,14 @@ allowed paths here:
 
 from __future__ import annotations
 
+import logging
 import re
-from typing import Callable, Optional, Protocol, Sequence
+from typing import Any, Callable, Optional, Protocol, Sequence
 
 from .calibration import CalibrationRecord, baseline_estimate
 from .envelopes import WorkEstimate
+
+log = logging.getLogger("skynet_orchestration.estimator")
 
 
 class Estimator(Protocol):
@@ -130,15 +133,22 @@ class CompositeEstimator:
 
     def estimate(self, query: str) -> WorkEstimate:
         baseline = baseline_estimate(query, self._history, similarity_fn=self._sim)
+        caller_est: Optional[WorkEstimate] = None
+        if self._caller is not None:
+            try:
+                caller_est = self._caller.estimate(query)
+            except Exception as exc:  # noqa: BLE001
+                # The LLM judge endpoint is allowed to be flaky; the
+                # composite never explodes — we just drop its opinion.
+                log.debug("caller estimator raised: %s", exc)
+                caller_est = None
         if baseline is None:
             structural = structural_fallback(query)
-            if self._caller is None:
+            if caller_est is None:
                 return structural
-            caller_est = self._caller.estimate(query)
             return _blend(structural, caller_est, weight=0.5)
-        if self._caller is None:
+        if caller_est is None:
             return baseline
-        caller_est = self._caller.estimate(query)
         return _blend(baseline, caller_est, weight=self._history_weight)
 
 
@@ -151,6 +161,126 @@ def _blend(a: WorkEstimate, b: WorkEstimate, *, weight: float) -> WorkEstimate:
         time_ms=int(w * a.time_ms + (1 - w) * b.time_ms),
         confidence=max(a.confidence, b.confidence),
         complexity=a.complexity if a.complexity != "unknown" else b.complexity,
+    )
+
+
+# ---------------------------------------------------------------------------
+# LLM-judge estimator (Phase 8) — POSTs to a configurable HTTP endpoint
+# ---------------------------------------------------------------------------
+
+
+class LLMJudgeEstimator:
+    """An :class:`Estimator` that delegates to an HTTP endpoint.
+
+    The endpoint is expected to return a JSON object with the
+    :class:`WorkEstimate` fields (``tokens_needed``,
+    ``tool_calls_expected``, ``time_ms``, ``confidence``,
+    ``complexity``). On any failure (network error, malformed JSON,
+    missing fields) :meth:`estimate` returns ``None`` so the
+    :class:`CompositeEstimator` upstream can fall back to history /
+    structural fallback.
+
+    The library DOES NOT bundle an HTTP client by default — callers
+    pass an ``httpx.Client`` (or compatible) so the dependency stays
+    optional and tests can plug a fake. The chosen separation also
+    keeps the estimator usable from sync handlers (the AgentServer
+    is sync); async callers can wrap their own ``httpx.AsyncClient``
+    in a thin adapter that exposes ``.post(...).json()``.
+
+    Construction::
+
+        from skynet_orchestration.estimator import LLMJudgeEstimator
+        import httpx
+        est = LLMJudgeEstimator(
+            url="http://skynet-cache.skynet-cache.svc:8080/estimate",
+            target="music",
+            http_client=httpx.Client(timeout=4.0),
+        )
+        composite = CompositeEstimator(
+            similarity_fn=cosine,
+            history=history,
+            caller_estimator=est,
+        )
+    """
+
+    def __init__(
+        self,
+        *,
+        url: str,
+        target: str,
+        http_client: Any,
+        timeout: float = 4.0,
+    ):
+        self._url = url
+        self._target = target
+        self._http = http_client
+        self._timeout = timeout
+
+    def estimate(self, query: str) -> Optional[WorkEstimate]:  # type: ignore[override]
+        """Return a :class:`WorkEstimate` from the endpoint, or ``None``.
+
+        ``None`` is the documented "I have no opinion" answer — the
+        :class:`CompositeEstimator` will then ignore the LLM judge for
+        this request and use whatever pure structural / historical
+        path was available.
+        """
+        if not self._url or not self._http:
+            return None
+        try:
+            resp = self._http.post(
+                self._url,
+                json={"target": self._target, "query": query or ""},
+                timeout=self._timeout,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("LLM judge endpoint unreachable: %s", exc)
+            return None
+        try:
+            status_ok = getattr(resp, "status_code", 200) == 200
+        except Exception:  # noqa: BLE001
+            status_ok = True
+        if not status_ok:
+            log.debug(
+                "LLM judge returned non-200 status=%s for target=%s",
+                getattr(resp, "status_code", "?"),
+                self._target,
+            )
+            return None
+        try:
+            data = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            log.debug("LLM judge returned invalid JSON: %s", exc)
+            return None
+        return _coerce_work_estimate(data)
+
+
+def _coerce_work_estimate(data: Any) -> Optional[WorkEstimate]:
+    """Best-effort: build a WorkEstimate from a loose dict.
+
+    Returns ``None`` when required numeric fields are absent or
+    invalid — the composite estimator will then ignore the LLM
+    judge for this request and fall back to the historical /
+    structural baseline.
+    """
+    if not isinstance(data, dict):
+        return None
+    try:
+        tokens = int(data.get("tokens_needed", 0))
+        tool_calls = int(data.get("tool_calls_expected", 1))
+        time_ms = int(data.get("time_ms", 0))
+        # Out-of-band ``null`` is fine — defaults are conservative.
+        confidence = float(data.get("confidence", 0.3))
+        complexity = data.get("complexity") or "unknown"
+    except (TypeError, ValueError):
+        return None
+    if tokens <= 0 or time_ms < 0:
+        return None
+    return WorkEstimate(
+        tokens_needed=tokens,
+        tool_calls_expected=max(1, tool_calls),
+        time_ms=time_ms,
+        confidence=max(0.0, min(1.0, confidence)),
+        complexity=complexity if complexity in ("low", "medium", "high", "unknown") else "unknown",
     )
 
 

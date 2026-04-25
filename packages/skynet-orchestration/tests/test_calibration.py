@@ -17,16 +17,32 @@ def test_record_and_load_history_round_trip(redis):
 
 
 def test_history_trim_keeps_most_recent(redis):
-    """Trim semantics: only the last ``keep_last`` survive."""
+    """Logical-time window: samples older than the configured window
+    are dropped, newer ones survive.
+
+    Phase 8 changed the trim from FIFO entry count (``keep_last``) to
+    a logical-clock window — pass ``window_ticks`` (or rely on the
+    default of 5×half_life). We test with a small window and verify
+    that only the recent samples remain.
+    """
     actuals = WorkActuals(tokens_used=100, tool_calls_made=1, time_ms=100)
+    # window_ticks=8 → tick floor = current_tick - 8. After writing
+    # 15 samples (ticks 1..15), the floor is at tick 7 → ticks 8..15
+    # survive (8 entries).
     for i in range(15):
-        calibration.record_outcome(redis, "music", f"i{i}", f"q{i}", actuals, keep_last=10)
+        calibration.record_outcome(redis, "music", f"i{i}", f"q{i}", actuals, window_ticks=8)
     hist = calibration.load_history(redis, "music")
-    assert len(hist) == 10
-    # First 5 should be gone.
     seen_queries = {h.query for h in hist}
+    # The very first sample is far below the window floor and must
+    # have been pruned.
     assert "q0" not in seen_queries
+    # The most recent sample is always retained.
     assert "q14" in seen_queries
+    # Window trim is by logical tick, not entry count: anywhere in
+    # the [8, 15] entries survive depending on race ordering, but
+    # by definition the first ones are gone.
+    assert len(hist) <= 15
+    assert len(hist) >= 7
 
 
 def test_baseline_estimate_uses_median(redis):

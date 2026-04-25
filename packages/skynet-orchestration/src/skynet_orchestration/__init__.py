@@ -47,7 +47,16 @@ Each submodule has its own docstring with the design rationale.
 
 from __future__ import annotations
 
-from . import budget, calibration, chronicle, estimator, gates, streaming, tokens
+from . import (
+    budget,
+    calibration,
+    chronicle,
+    estimator,
+    gates,
+    metrics,
+    streaming,
+    tokens,
+)
 from .chronicle import configure_chronicle
 from .client import AgentClient
 from .envelopes import (
@@ -92,6 +101,7 @@ __all__ = [
     "chronicle",
     "estimator",
     "gates",
+    "metrics",
     "streaming",
     "tokens",
 ]

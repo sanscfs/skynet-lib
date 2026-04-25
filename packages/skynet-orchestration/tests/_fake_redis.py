@@ -60,6 +60,8 @@ class FakeRedis:
         self._hashes: dict[str, dict[str, str]] = {}
         self._lists: dict[str, list[str]] = {}
         self._streams: dict[str, list[dict]] = {}
+        # ZSET storage: {key: {member: score}}
+        self._zsets: dict[str, dict[str, float]] = {}
 
     # ---- pipelines -------------------------------------------------------
     def pipeline(self) -> _Pipeline:
@@ -73,8 +75,36 @@ class FakeRedis:
     def get(self, key: str) -> str | None:
         return self._kv.get(key)
 
+    def incr(self, key: str) -> int:
+        cur = int(self._kv.get(key, "0"))
+        cur += 1
+        self._kv[key] = str(cur)
+        return cur
+
+    def delete(self, *keys: str) -> int:
+        n = 0
+        for k in keys:
+            for store in (self._kv, self._hashes, self._lists, self._zsets):
+                if k in store:
+                    del store[k]
+                    n += 1
+        return n
+
+    def type(self, key: str) -> str:
+        if key in self._kv:
+            return "string"
+        if key in self._hashes:
+            return "hash"
+        if key in self._lists:
+            return "list"
+        if key in self._zsets:
+            return "zset"
+        if key in self._streams:
+            return "stream"
+        return "none"
+
     def expire(self, key: str, seconds: int) -> bool:
-        return key in self._kv or key in self._hashes or key in self._lists
+        return key in self._kv or key in self._hashes or key in self._lists or key in self._zsets
 
     # ---- hashes ----------------------------------------------------------
     def hsetnx(self, key: str, field: str, value: Any) -> int:
@@ -147,6 +177,79 @@ class FakeRedis:
 
     def llen(self, key: str) -> int:
         return len(self._lists.get(key, []))
+
+    # ---- sorted sets -----------------------------------------------------
+    def zadd(self, key: str, mapping: dict[str, float]) -> int:
+        z = self._zsets.setdefault(key, {})
+        added = 0
+        for member, score in mapping.items():
+            if member not in z:
+                added += 1
+            z[member] = float(score)
+        return added
+
+    def zrange(
+        self,
+        key: str,
+        start: int,
+        stop: int,
+        *,
+        withscores: bool = False,
+    ):
+        z = self._zsets.get(key, {})
+        items = sorted(z.items(), key=lambda x: (x[1], x[0]))
+        if stop == -1:
+            sliced = items[start:]
+        else:
+            sliced = items[start : stop + 1]
+        if withscores:
+            return [(m, s) for m, s in sliced]
+        return [m for m, _ in sliced]
+
+    def zremrangebyscore(self, key: str, min_score, max_score) -> int:
+        """Mimic Redis ZREMRANGEBYSCORE — supports ``"-inf"`` / ``"+inf"``
+        and Redis's ``"(N"`` exclusive notation."""
+        z = self._zsets.get(key)
+        if not z:
+            return 0
+
+        def _parse(b, default):
+            if isinstance(b, (int, float)):
+                return float(b), False
+            s = str(b)
+            if s == "-inf":
+                return float("-inf"), False
+            if s == "+inf" or s == "inf":
+                return float("inf"), False
+            exclusive = s.startswith("(")
+            if exclusive:
+                s = s[1:]
+            return float(s), exclusive
+
+        lo, lo_excl = _parse(min_score, float("-inf"))
+        hi, hi_excl = _parse(max_score, float("inf"))
+
+        to_remove = []
+        for member, score in z.items():
+            if lo_excl:
+                if score <= lo:
+                    continue
+            else:
+                if score < lo:
+                    continue
+            if hi_excl:
+                if score >= hi:
+                    continue
+            else:
+                if score > hi:
+                    continue
+            to_remove.append(member)
+        for m in to_remove:
+            del z[m]
+        return len(to_remove)
+
+    def zcard(self, key: str) -> int:
+        return len(self._zsets.get(key, {}))
 
     # ---- streams (chronicle uses xadd only) ------------------------------
     def xadd(self, stream: str, fields: dict, *, maxlen: int | None = None, approximate: bool = True) -> str:

@@ -260,15 +260,17 @@ def test_handle_records_accept_samples_into_calibration(redis, cosine, specifici
         assert result.status == "ok", f"call {i} failed: {result.error}"
 
     # Each pass records one target_cosine + one state_cosine accept.
+    # Storage is now a ZSET (logical-time decay, Phase 8) so we read
+    # via ``zrange`` instead of the legacy ``lrange``.
     target_key = "orchestration:calibration:thresh:music:sre:justification_target_cosine.accept"
     state_key = "orchestration:calibration:thresh:music:sre:justification_state_cosine.accept"
-    assert len(redis.lrange(target_key, 0, -1)) == 3
-    assert len(redis.lrange(state_key, 0, -1)) == 3
+    assert len(redis.zrange(target_key, 0, -1)) == 3
+    assert len(redis.zrange(state_key, 0, -1)) == 3
 
     # And no reject-side samples for justification (every comparison passed).
     assert (
         len(
-            redis.lrange(
+            redis.zrange(
                 "orchestration:calibration:thresh:music:sre:justification_target_cosine.reject",
                 0,
                 -1,
@@ -304,5 +306,5 @@ def test_handle_records_reject_samples_when_gate_blocks(redis, cosine, specifici
     assert result.rejected_by_gate == "justification"
 
     reject_key = "orchestration:calibration:thresh:music:sre:justification_target_cosine.reject"
-    samples = redis.lrange(reject_key, 0, -1)
+    samples = redis.zrange(reject_key, 0, -1)
     assert len(samples) == 1

@@ -1,6 +1,6 @@
 [project]
 name = "skynet-orchestration"
-version = "2026.4.25.3"
+version = "2026.4.25.4"
 description = "Skynet agent-to-agent orchestration: envelopes, gates (cycle/repeat/justification/convergence), shared budget, self-estimation, calibration, FastAPI server + httpx client. One protocol for every sub-agent."
 requires-python = ">=3.12"
 dependencies = [
@@ -14,6 +14,7 @@ dependencies = [
 [project.optional-dependencies]
 server = [
     "fastapi>=0.110",
+    "prometheus-client>=0.20",
 ]
 matrix = [
     "skynet-matrix>=2026.4.24",

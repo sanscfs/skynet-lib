@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from . import budget as budget_mod
-from . import gates, tokens
+from . import gates, metrics, tokens
 from .calibration import record_threshold_sample, threshold_snapshot
 from .chronicle import emit_call_start
 from .chronicle import emit_event as chronicle_emit
@@ -210,6 +210,37 @@ class AgentServer:
         """Verify, gate, dispatch, finalize. Synchronous to keep the
         handler's mental model simple."""
 
+        _started = time.time()
+
+        def _finalize(result: AgentResult) -> AgentResult:
+            """Stamp prometheus metrics + return.
+
+            We funnel every exit through here so the metric counters
+            never miss a code path (token reject, gate reject, handler
+            crash, normal return). Metrics calls are no-ops when
+            prometheus-client isn't installed.
+            """
+            try:
+                metrics.record_invocation(
+                    caller=call.caller,
+                    target=call.target,
+                    purpose=str(call.purpose) if call.purpose else "unknown",
+                    status=str(result.status) if result.status else "unknown",
+                    duration_seconds=time.time() - _started,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            if result.rejected_by_gate:
+                try:
+                    metrics.record_rejection(
+                        caller=call.caller,
+                        target=call.target,
+                        gate=str(result.rejected_by_gate),
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            return result
+
         # 1. Token check -- proves the call wasn't fabricated client-side.
         try:
             tokens.verify(
@@ -218,13 +249,15 @@ class AgentServer:
                 caller=call.caller,
             )
         except tokens.TokenError as e:
-            return AgentResult(
-                invocation_id=call.invocation_id,
-                status="rejected",
-                output="",
-                actuals=WorkActuals(tokens_used=0, tool_calls_made=0, time_ms=0),
-                error=f"token verification failed: {e}",
-                rejected_by_gate="token",
+            return _finalize(
+                AgentResult(
+                    invocation_id=call.invocation_id,
+                    status="rejected",
+                    output="",
+                    actuals=WorkActuals(tokens_used=0, tool_calls_made=0, time_ms=0),
+                    error=f"token verification failed: {e}",
+                    rejected_by_gate="token",
+                )
             )
 
         # 2. Run all four gates against the INCOMING chain (i.e. without
@@ -294,13 +327,15 @@ class AgentServer:
                 rejection.gate,
                 rejection.reason,
             )
-            return AgentResult(
-                invocation_id=call.invocation_id,
-                status="rejected",
-                output="",
-                actuals=WorkActuals(tokens_used=0, tool_calls_made=0, time_ms=0),
-                error=rejection.reason,
-                rejected_by_gate=rejection.gate,
+            return _finalize(
+                AgentResult(
+                    invocation_id=call.invocation_id,
+                    status="rejected",
+                    output="",
+                    actuals=WorkActuals(tokens_used=0, tool_calls_made=0, time_ms=0),
+                    error=rejection.reason,
+                    rejected_by_gate=rejection.gate,
+                )
             )
 
         # 3. Gates passed -- now write our own name onto the chain so
@@ -357,7 +392,7 @@ class AgentServer:
         if result.invocation_id != call.invocation_id:
             result = result.model_copy(update={"invocation_id": call.invocation_id})
 
-        return result
+        return _finalize(result)
 
     # -- adaptive threshold derivation -------------------------------------
 
@@ -485,5 +520,18 @@ class AgentServer:
         @router.get("/healthz")
         def healthz():
             return {"agent": self.name, "ok": True}
+
+        # /metrics: prometheus text exposition. The function is a
+        # graceful no-op when prometheus-client isn't installed —
+        # callers still get a 200 with a "# not installed" comment so
+        # scraping doesn't 500. Mounted unconditionally so a single
+        # ServiceMonitor selector works across services regardless of
+        # whether they happen to have the [server] extra at runtime.
+        from fastapi.responses import Response  # local import: optional dep
+
+        @router.get("/metrics")
+        def metrics_endpoint() -> Response:
+            body, content_type = metrics.latest_text()
+            return Response(content=body, media_type=content_type)
 
         return router

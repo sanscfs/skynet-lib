@@ -189,8 +189,17 @@ def check_justification(
        observed failure of the calling agent so spurious recovery
        calls (caller_state="ok" but reason="postgres broken") fail.
 
-    purpose=user_task skips the gate -- top-level main delegations
-    don't need to justify themselves to the user.
+    purpose=user_task does NOT gate on the cosine check (top-level
+    main delegations don't need to justify themselves to the user).
+    However, when a ``reason`` IS supplied for a user_task call, we
+    still COMPUTE both cosines and feed them into ``record_sample``
+    as ``accept`` samples. Rationale: the
+    ``justification_target_cosine.accept`` corpus is what the server's
+    adaptive-threshold logic consults; without user_task feeding it,
+    the corpus only ever fills from rare lateral calls (self_recovery
+    / delegation) and stays cold-start indefinitely. Recording without
+    gating warms the corpus from real top-level traffic so future
+    lateral calls have a real distribution to be compared against.
 
     When ``record_sample`` is supplied, both the target-cosine and
     (when applicable) the state-cosine are recorded under metrics
@@ -199,6 +208,30 @@ def check_justification(
     only the failing comparison ends up in the reject bucket.
     """
     if call.purpose == "user_task":
+        # Non-gating sample writes: feed the .accept corpus from
+        # top-level traffic without enforcing the cosine threshold.
+        # Skip cosine computation entirely when reason is None — there
+        # is nothing to compare against and a synthetic sample would
+        # poison the distribution.
+        if call.reason and record_sample is not None:
+            try:
+                target_sim = cosine_fn(call.reason, target_description)
+                record_sample(
+                    "justification_target_cosine",
+                    float(target_sim),
+                    accepted=True,
+                )
+                if caller_state:
+                    state_sim = cosine_fn(call.reason, caller_state)
+                    record_sample(
+                        "justification_state_cosine",
+                        float(state_sim),
+                        accepted=True,
+                    )
+            except Exception:
+                # Sample writes are best-effort; never fail user_task
+                # because the calibration corpus had a hiccup.
+                pass
         return None
     if not call.reason:
         return GateRejection(
