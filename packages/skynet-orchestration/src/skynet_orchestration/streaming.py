@@ -44,35 +44,21 @@ def open_thread_stream(
 ):
     """Create or retrieve the LiveStream for an invocation.
 
-    Returns ``None`` when ``skynet-matrix`` isn't installed or the
-    ThreadHandle is missing required fields. Callers must always
-    handle the None case -- streaming is best-effort.
+    NOTE: Currently a no-op stub. The original design tried to construct
+    a ``skynet_matrix.LiveStream`` directly but the library's actual
+    constructor needs a ``redis_client`` + ``matrix_client`` pair plus a
+    ``session_id`` (not the per-message ``thread_root``) -- those aren't
+    available in the per-invocation context here. Phase 6 follow-up:
+    add a callable factory to the AgentServer constructor that builds
+    a properly-wired LiveStream from per-service infrastructure, OR
+    introduce a thinner thread-message poster that doesn't need the
+    full matrix-client lifecycle.
+
+    Until then, all streamed events still land in the chronicle Redis
+    stream (orchestration:events on DB 7) so observability isn't lost,
+    just the inline Matrix-thread visibility.
     """
-    if not handle.room_id or not handle.thread_root:
-        return None
-    with _streams_lock:
-        cached = _streams.get(invocation_id)
-        if cached is not None:
-            return cached
-        try:
-            from skynet_matrix.live_stream import LiveStream  # type: ignore
-        except ImportError:
-            log.debug("skynet-matrix not installed; thread streaming disabled")
-            return None
-        try:
-            stream = LiveStream(
-                room_id=handle.room_id,
-                thread_root=handle.thread_root,
-                # The service tag becomes the prefix on every emit so
-                # @skynet-sre vs @skynet-music is visible in the
-                # thread without each service having to add it.
-                service=service_name,
-            )
-        except Exception as e:  # noqa: BLE001
-            log.warning("failed to open LiveStream: %s", e)
-            return None
-        _streams[invocation_id] = stream
-        return stream
+    return None
 
 
 def emit_to_thread(
