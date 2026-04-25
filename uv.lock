@@ -18,6 +18,7 @@ members = [
     "skynet-lib-workspace",
     "skynet-matrix",
     "skynet-mcp",
+    "skynet-orchestration",
     "skynet-postgres",
     "skynet-providers",
     "skynet-qdrant",
@@ -1761,7 +1762,7 @@ dev = [
 
 [[package]]
 name = "skynet-matrix"
-version = "2026.4.24.6"
+version = "2026.4.24.8"
 source = { editable = "packages/skynet-matrix" }
 dependencies = [
     { name = "httpx" },
@@ -1801,6 +1802,38 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
 ]
 provides-extras = ["otel"]
+
+[[package]]
+name = "skynet-orchestration"
+version = "2026.4.25"
+source = { editable = "packages/skynet-orchestration" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "redis" },
+    { name = "skynet-core" },
+    { name = "skynet-embedding" },
+]
+
+[package.optional-dependencies]
+matrix = [
+    { name = "skynet-matrix" },
+]
+server = [
+    { name = "fastapi" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.110" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pydantic", specifier = ">=2.6" },
+    { name = "redis", specifier = ">=5.0" },
+    { name = "skynet-core", editable = "packages/skynet-core" },
+    { name = "skynet-embedding", editable = "packages/skynet-embedding" },
+    { name = "skynet-matrix", marker = "extra == 'matrix'", editable = "packages/skynet-matrix" },
+]
+provides-extras = ["server", "matrix"]
 
 [[package]]
 name = "skynet-postgres"

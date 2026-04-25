@@ -27,6 +27,7 @@ skynet-vibe = { workspace = true }
 skynet-providers = { workspace = true }
 skynet-capture = { workspace = true }
 skynet-taste = { workspace = true }
+skynet-orchestration = { workspace = true }
 
 [dependency-groups]
 dev = [
