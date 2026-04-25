@@ -107,6 +107,14 @@ class BotConfig:
     live_stream: bool = True
     live_stream_bot_name: Optional[str] = None  # default: bot_name
     live_stream_initial_text: str = "\u25b8 _thinking..._"
+    # Cross-restart event dedup. When ``stream_redis_client`` is set,
+    # every inbound ``event_id`` is claimed via a Redis SETNX; a claim
+    # failure (key existed) means a previous handler turn \u2014 possibly
+    # from a now-dead pod \u2014 already processed the event, so we skip.
+    # ``dedup_ttl_seconds`` MUST exceed the Matrix /sync ``timeline_limit``
+    # window for the busiest room (default 24h covers any sane case).
+    dedup_enabled: bool = True
+    dedup_ttl_seconds: int = 86_400
 
 
 # -- Menu owner marker used to find & edit our own pinned menu -------------
@@ -144,6 +152,8 @@ class CommandBot:
         live_stream_bot_name: Optional[str] = None,
         live_stream_initial_text: str = "\u25b8 _thinking..._",
         stream_redis_client: Any = None,
+        dedup_enabled: bool = True,
+        dedup_ttl_seconds: int = 86_400,
         client: Optional[Any] = None,  # injected for tests
     ) -> None:
         self.config = BotConfig(
@@ -161,6 +171,8 @@ class CommandBot:
             live_stream=live_stream,
             live_stream_bot_name=live_stream_bot_name,
             live_stream_initial_text=live_stream_initial_text,
+            dedup_enabled=dedup_enabled,
+            dedup_ttl_seconds=dedup_ttl_seconds,
         )
         # Optional Redis client for per-turn stream logging (XADD into a
         # Redis Stream). When ``None`` the live stream degrades to
@@ -580,6 +592,19 @@ class CommandBot:
             return  # never dispatch our own messages
 
         room_id = getattr(room, "room_id", None) or getattr(event, "room_id", None)
+
+        # Cluster-wide event dedup. ``Recreate`` deploy strategy + slow
+        # pod startup leave a 30s+ window where Matrix queues events;
+        # the new pod's first /sync then replays the backlog and we
+        # process each event N times across consecutive restarts. With
+        # the silent-turn redact path (d0171fa), each replay turns into
+        # a "Message deleted" stub in Element. Redis SETNX on the event
+        # id collapses those replays into one real processing per turn,
+        # transparent to all downstream callbacks.
+        if not await self._claim_event(event):
+            logger.debug("dedup: skipping replayed event %s", getattr(event, "event_id", "?"))
+            return
+
         # Chronicle-mirror EVERY inbound text, not just !commands.
         # This is the "raw transcript" layer — we want the full record
         # before any LLM / analyzer sees the message body.
@@ -622,6 +647,35 @@ class CommandBot:
             return
 
         await self._dispatch(cmd_name, args, room_id=room_id, event=event)
+
+    async def _claim_event(self, event: Any) -> bool:
+        """Try to mark an event as processed; return False if it was already.
+
+        Implementation: ``SET key NX EX dedup_ttl`` against the configured
+        Redis client. The key is keyed by ``bot_name`` + Matrix event_id
+        so a single homeserver event is processed exactly once *across
+        the entire pod lifetime + restarts*. When dedup is disabled
+        (no ``stream_redis_client`` passed to the bot, or no
+        ``event_id`` on the event), this falls open to the legacy
+        "process every event" behaviour.
+        """
+        redis = self._stream_redis
+        if redis is None or not self.config.dedup_enabled:
+            return True
+        event_id = getattr(event, "event_id", "") or ""
+        if not event_id:
+            return True
+        key = f"skynet:bot:{self.config.bot_name}:seen:{event_id}"
+        try:
+            res = redis.set(key, "1", nx=True, ex=self.config.dedup_ttl_seconds)
+            if asyncio.iscoroutine(res):
+                res = await res
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("dedup SETNX failed (open-fail): %s", exc)
+            return True
+        # redis-py: returns True when set, None when key existed.
+        # Some async clients return ``b"OK"`` / ``"OK"`` / ``True``.
+        return bool(res)
 
     async def _run_free_text(
         self,

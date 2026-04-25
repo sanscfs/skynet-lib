@@ -316,6 +316,103 @@ async def test_heartbeat_does_not_fire_on_busy_turn():
 
 
 @pytest.mark.asyncio
+async def test_dedup_skips_replayed_event():
+    """A second handle_text_event call with the same event_id must be a no-op."""
+    fake_redis = MagicMock()
+    seen: set[str] = set()
+
+    def _setnx(key, _val, nx=False, ex=None):
+        if key in seen:
+            return None
+        seen.add(key)
+        return True
+
+    fake_redis.set = _setnx
+
+    handler_calls: list[str] = []
+
+    async def on_text(event, body, thread_root=None):
+        handler_calls.append(body)
+        return None
+
+    bot, client = _make_bot_with_on_text(on_text, stream_redis_client=fake_redis)
+    room = SimpleNamespace(room_id="!room:t")
+    event = SimpleNamespace(
+        sender="@user:t",
+        body="vibe check",
+        event_id="$dup:1",
+        server_timestamp=None,
+        source={"content": {}},
+    )
+
+    await bot.handle_text_event(room, event)
+    await bot.handle_text_event(room, event)
+    await bot.handle_text_event(room, event)
+
+    # Handler ran exactly once despite three deliveries of the same event.
+    assert len(handler_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_dedup_disabled_processes_every_call():
+    """With dedup_enabled=False, replays still flow through."""
+    fake_redis = MagicMock()
+    fake_redis.set = MagicMock()  # would always succeed but should NOT be called
+
+    handler_calls: list[str] = []
+
+    async def on_text(event, body, thread_root=None):
+        handler_calls.append(body)
+        return None
+
+    bot, _ = _make_bot_with_on_text(
+        on_text,
+        stream_redis_client=fake_redis,
+        dedup_enabled=False,
+    )
+    room = SimpleNamespace(room_id="!room:t")
+    event = SimpleNamespace(
+        sender="@user:t",
+        body="x",
+        event_id="$d:2",
+        server_timestamp=None,
+        source={"content": {}},
+    )
+    await bot.handle_text_event(room, event)
+    await bot.handle_text_event(room, event)
+
+    fake_redis.set.assert_not_called()
+    assert len(handler_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_dedup_open_fails_on_redis_error():
+    """A Redis exception must NOT block message processing."""
+
+    class _ExplodingRedis:
+        def set(self, *_a, **_kw):
+            raise RuntimeError("redis is down")
+
+    handler_calls: list[str] = []
+
+    async def on_text(event, body, thread_root=None):
+        handler_calls.append(body)
+        return None
+
+    bot, _ = _make_bot_with_on_text(on_text, stream_redis_client=_ExplodingRedis())
+    room = SimpleNamespace(room_id="!room:t")
+    event = SimpleNamespace(
+        sender="@user:t",
+        body="x",
+        event_id="$d:3",
+        server_timestamp=None,
+        source={"content": {}},
+    )
+    await bot.handle_text_event(room, event)
+    assert len(handler_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_complete_silent_turn_redacts_placeholder():
     """Regression guard: silent-turn cleanup must leave zero artefacts."""
     client = _fake_client()
