@@ -48,6 +48,7 @@ Each submodule has its own docstring with the design rationale.
 from __future__ import annotations
 
 from . import budget, calibration, chronicle, estimator, gates, streaming, tokens
+from .chronicle import configure_chronicle
 from .client import AgentClient
 from .envelopes import (
     PROTOCOL_VERSION,
@@ -63,6 +64,7 @@ from .envelopes import (
     WorkEstimate,
 )
 from .server import AgentServer, HandlerContext
+from .streaming import configure_streaming
 
 __all__ = [
     # envelopes
@@ -81,6 +83,9 @@ __all__ = [
     "AgentClient",
     "AgentServer",
     "HandlerContext",
+    # cross-cutting wiring
+    "configure_chronicle",
+    "configure_streaming",
     # submodules with internal helpers
     "budget",
     "calibration",
