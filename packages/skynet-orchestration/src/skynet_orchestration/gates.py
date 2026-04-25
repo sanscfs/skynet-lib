@@ -21,14 +21,52 @@ Convention: every gate returns ``None`` to allow the call, or a
 :class:`GateRejection` to block it. Callers (the AgentServer)
 collapse a rejection into ``status=rejected, rejected_by_gate=<name>``
 so the parent invocation can decide what to do.
+
+Self-learning threshold encoding
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The cosine-based gates (``check_repeat`` and ``check_justification``)
+take an optional ``record_sample`` callback. Whenever they compute a
+similarity, they emit one sample with the polarity baked into the
+metric *name suffix*::
+
+    <base_metric>.accept   # cosine of an accepted call
+    <base_metric>.reject   # cosine of a rejected call
+
+Splitting at the metric-name level (rather than packing polarity
+into the value) keeps the snapshot reader trivially symmetric: it
+just calls ``threshold_snapshot`` on whichever bucket it wants
+percentiles from, without needing to know how the polarity is
+encoded. Three base metrics in use:
+
+- ``repeat_cosine``                — emitted by check_repeat
+- ``justification_target_cosine``  — emitted by the target check
+- ``justification_state_cosine``   — emitted by the state check
+
+The server reads ``<metric>.reject`` p75 for the repeat threshold
+(stay above the historical p75 of blocked similarities) and
+``<metric>.accept`` p25 for the justification thresholds (admit
+the bottom of the historically-accepted distribution). See
+``server.py`` for the policy.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Protocol
 
 from .envelopes import AgentCall
+
+
+class RecordSampleFn(Protocol):
+    """Signature of the optional sample-recording callback.
+
+    Cosine-based gates call ``record_sample(metric, value, accepted=...)``
+    once per similarity they compute, so the calibration corpus sees
+    *both* sides of the gate decision (not just the accepts).
+    """
+
+    def __call__(self, metric: str, value: float, *, accepted: bool) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -72,6 +110,7 @@ def check_repeat(
     history: Iterable["HistoricalCall"],
     cosine_fn,
     threshold: float = 0.85,
+    record_sample: Optional[RecordSampleFn] = None,
 ) -> Optional[GateRejection]:
     """Reject if the same (caller, target) has issued a near-identical
     query already in this tree.
@@ -82,12 +121,21 @@ def check_repeat(
     threshold is adaptive in the sense that the *server* may pull it
     from a per-pair AdaptiveThreshold; this function only enforces
     the comparison itself, which is what's testable in isolation.
+
+    When ``record_sample`` is supplied, every computed similarity
+    feeds back into the calibration corpus under metric
+    ``repeat_cosine`` with ``accepted=`` reflecting the gate's
+    decision for that comparison. The recording happens *before* the
+    short-circuit return so a hit is still observed.
     """
     for prev in history:
         if prev.caller != call.caller or prev.target != call.target:
             continue
         sim = cosine_fn(prev.query, call.query)
-        if sim >= threshold:
+        accepted = sim < threshold
+        if record_sample is not None:
+            record_sample("repeat_cosine", float(sim), accepted=accepted)
+        if not accepted:
             return GateRejection(
                 gate="repeat",
                 reason=f"prev_invocation_id={prev.invocation_id} cos={sim:.2f} >= {threshold:.2f}",
@@ -122,6 +170,7 @@ def check_justification(
     cosine_fn,
     target_threshold: float = 0.40,
     state_threshold: float = 0.30,
+    record_sample: Optional[RecordSampleFn] = None,
 ) -> Optional[GateRejection]:
     """Reject if ``reason`` doesn't tie the call to the target *or*
     to the caller's own state.
@@ -142,6 +191,12 @@ def check_justification(
 
     purpose=user_task skips the gate -- top-level main delegations
     don't need to justify themselves to the user.
+
+    When ``record_sample`` is supplied, both the target-cosine and
+    (when applicable) the state-cosine are recorded under metrics
+    ``justification_target_cosine`` and ``justification_state_cosine``.
+    On a target-side rejection the state-side is never computed, so
+    only the failing comparison ends up in the reject bucket.
     """
     if call.purpose == "user_task":
         return None
@@ -151,14 +206,20 @@ def check_justification(
             reason=f"missing reason for purpose={call.purpose}",
         )
     target_sim = cosine_fn(call.reason, target_description)
-    if target_sim < target_threshold:
+    target_accepted = target_sim >= target_threshold
+    if record_sample is not None:
+        record_sample("justification_target_cosine", float(target_sim), accepted=target_accepted)
+    if not target_accepted:
         return GateRejection(
             gate="justification",
             reason=(f"cos(reason, target_description)={target_sim:.2f} < {target_threshold:.2f}"),
         )
     if call.purpose == "self_recovery" and caller_state:
         state_sim = cosine_fn(call.reason, caller_state)
-        if state_sim < state_threshold:
+        state_accepted = state_sim >= state_threshold
+        if record_sample is not None:
+            record_sample("justification_state_cosine", float(state_sim), accepted=state_accepted)
+        if not state_accepted:
             return GateRejection(
                 gate="justification",
                 reason=(f"cos(reason, caller_state)={state_sim:.2f} < {state_threshold:.2f}"),

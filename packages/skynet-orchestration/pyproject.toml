@@ -1,6 +1,6 @@
 [project]
 name = "skynet-orchestration"
-version = "2026.4.25.2"
+version = "2026.4.25.3"
 description = "Skynet agent-to-agent orchestration: envelopes, gates (cycle/repeat/justification/convergence), shared budget, self-estimation, calibration, FastAPI server + httpx client. One protocol for every sub-agent."
 requires-python = ">=3.12"
 dependencies = [

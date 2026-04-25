@@ -1762,7 +1762,7 @@ dev = [
 
 [[package]]
 name = "skynet-matrix"
-version = "2026.4.24.8"
+version = "2026.4.24.9"
 source = { editable = "packages/skynet-matrix" }
 dependencies = [
     { name = "httpx" },
@@ -1805,7 +1805,7 @@ provides-extras = ["otel"]
 
 [[package]]
 name = "skynet-orchestration"
-version = "2026.4.25.2"
+version = "2026.4.25.3"
 source = { editable = "packages/skynet-orchestration" }
 dependencies = [
     { name = "httpx" },
@@ -1859,7 +1859,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "skynet-providers"
-version = "2026.4.28"
+version = "2026.4.29"
 source = { editable = "packages/skynet-providers" }
 dependencies = [
     { name = "httpx" },

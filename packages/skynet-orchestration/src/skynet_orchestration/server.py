@@ -35,6 +35,7 @@ from typing import Callable, Optional
 
 from . import budget as budget_mod
 from . import gates, tokens
+from .calibration import record_threshold_sample, threshold_snapshot
 from .chronicle import emit_call_start
 from .chronicle import emit_event as chronicle_emit
 from .envelopes import (
@@ -47,6 +48,16 @@ from .envelopes import (
 from .streaming import close_stream, emit_to_thread
 
 log = logging.getLogger("skynet_orchestration.server")
+
+# How many gate checks to absorb before logging a one-line summary of
+# the live adaptive thresholds. Pure observability — no behaviour
+# depends on this knob.
+_ADAPTIVE_LOG_EVERY = 50
+
+# Minimum samples on the relevant accept/reject bucket before the
+# server trusts the percentile snapshot. Below this the static
+# constructor default is used (cold-start fallback).
+_ADAPTIVE_MIN_SAMPLES = 20
 
 
 # ---------------------------------------------------------------------------
@@ -182,9 +193,16 @@ class AgentServer:
         self._sim = similarity_fn
         self._specificity = specificity_fn
         self._caller_state_fn = caller_state_fn
+        # Cold-start fallbacks: used until the calibration corpus has
+        # >= _ADAPTIVE_MIN_SAMPLES on the relevant accept/reject bucket.
         self._repeat_threshold = repeat_threshold
         self._just_target_thr = justification_target_threshold
         self._just_state_thr = justification_state_threshold
+        # Per-(caller, target, metric) counter, in-process only — rate-
+        # limits the "adaptive threshold for X: static→derived" INFO
+        # log. Best-effort: replicas don't share this so each emits
+        # their own log every N checks, which is fine for observability.
+        self._adaptive_log_counter: dict[tuple[str, str, str], int] = {}
 
     # -- main entry point --------------------------------------------------
 
@@ -212,22 +230,56 @@ class AgentServer:
         # 2. Run all four gates against the INCOMING chain (i.e. without
         #    our own name yet). cycle check would otherwise trivially
         #    fire on every call because we'd be matching ourselves.
+        #
+        #    Adaptive thresholds: for cosine-based gates we look up the
+        #    historical distribution per (caller, target) and derive
+        #    today's threshold from it. The static constructor default
+        #    is used until the bucket has enough samples.
         history = self._load_invocation_history(call.root_invocation_id)
+
+        repeat_thr = self._derive_repeat_threshold(call.caller, call.target)
+        just_target_thr = self._derive_justification_threshold(
+            call.caller, call.target, "justification_target_cosine", self._just_target_thr
+        )
+        just_state_thr = self._derive_justification_threshold(
+            call.caller, call.target, "justification_state_cosine", self._just_state_thr
+        )
+
+        # Sample-recording callback: every cosine the gates compute
+        # gets pushed into the calibration corpus as
+        # ``<metric>.accept`` or ``<metric>.reject`` so future calls
+        # can use the percentile snapshot to tighten / loosen.
+        def _record(metric: str, value: float, *, accepted: bool) -> None:
+            suffix = "accept" if accepted else "reject"
+            try:
+                record_threshold_sample(
+                    self._redis,
+                    caller=call.caller,
+                    target=call.target,
+                    metric=f"{metric}.{suffix}",
+                    value=value,
+                )
+            except Exception as e:  # noqa: BLE001
+                # Calibration write-back must never break a request.
+                log.warning("threshold sample write failed: %s", e)
+
         rejection = (
             gates.check_cycle(call)
             or gates.check_repeat(
                 call,
                 history=history,
                 cosine_fn=self._sim,
-                threshold=self._repeat_threshold,
+                threshold=repeat_thr,
+                record_sample=_record,
             )
             or gates.check_justification(
                 call,
                 target_description=self.target_description,
                 caller_state=self._caller_state_fn() if self._caller_state_fn else None,
                 cosine_fn=self._sim,
-                target_threshold=self._just_target_thr,
-                state_threshold=self._just_state_thr,
+                target_threshold=just_target_thr,
+                state_threshold=just_state_thr,
+                record_sample=_record,
             )
             or gates.check_convergence(
                 call,
@@ -306,6 +358,82 @@ class AgentServer:
             result = result.model_copy(update={"invocation_id": call.invocation_id})
 
         return result
+
+    # -- adaptive threshold derivation -------------------------------------
+
+    def _derive_repeat_threshold(self, caller: str, target: str) -> float:
+        """Derive the repeat-gate threshold from the *reject* bucket.
+
+        Logic: ``repeat_cosine.reject`` is the distribution of
+        similarities the gate has historically blocked. We hold today's
+        call to the p75 of that distribution, i.e. anything above the
+        historical p75-of-blocked-similarities continues to be blocked.
+        Falls back to the constructor default while the reject bucket
+        is empty / sparse — the cold start is conservative.
+        """
+        snap = self._safe_snapshot(caller, target, "repeat_cosine.reject")
+        if snap is None:
+            return self._repeat_threshold
+        derived = snap.p75
+        self._maybe_log_adaptive(caller, target, "repeat_cosine", self._repeat_threshold, derived, snap.sample_size)
+        return derived
+
+    def _derive_justification_threshold(self, caller: str, target: str, base_metric: str, default: float) -> float:
+        """Derive a justification threshold from the *accept* bucket.
+
+        Logic: ``<metric>.accept`` is the distribution of cosines that
+        previously passed the gate. We use p25 — the bottom of the
+        historically-accepted range — so anything as relevant as the
+        weakest historical accept is admissible. Falls back to the
+        constructor default until the accept bucket is populated.
+        """
+        snap = self._safe_snapshot(caller, target, f"{base_metric}.accept")
+        if snap is None:
+            return default
+        derived = snap.p25
+        self._maybe_log_adaptive(caller, target, base_metric, default, derived, snap.sample_size)
+        return derived
+
+    def _safe_snapshot(self, caller: str, target: str, metric: str):
+        """Wrap ``threshold_snapshot`` so a Redis hiccup never breaks
+        gate evaluation — the static fallback handles it transparently."""
+        try:
+            return threshold_snapshot(
+                self._redis,
+                caller=caller,
+                target=target,
+                metric=metric,
+                min_samples=_ADAPTIVE_MIN_SAMPLES,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("threshold snapshot read failed for %s/%s/%s: %s", caller, target, metric, e)
+            return None
+
+    def _maybe_log_adaptive(
+        self,
+        caller: str,
+        target: str,
+        metric: str,
+        static_value: float,
+        derived_value: float,
+        sample_size: int,
+    ) -> None:
+        """Emit a one-line INFO every _ADAPTIVE_LOG_EVERY checks per pair+metric."""
+        key = (caller, target, metric)
+        n = self._adaptive_log_counter.get(key, 0) + 1
+        self._adaptive_log_counter[key] = n
+        if n % _ADAPTIVE_LOG_EVERY == 1:
+            # log on the 1st, 51st, 101st, ... so a fresh process
+            # surfaces the current state immediately.
+            log.info(
+                "adaptive threshold for %s→%s metric=%s: %.3f→%.3f (sample_size=%d)",
+                caller,
+                target,
+                metric,
+                static_value,
+                derived_value,
+                sample_size,
+            )
 
     # -- helpers -----------------------------------------------------------
 
