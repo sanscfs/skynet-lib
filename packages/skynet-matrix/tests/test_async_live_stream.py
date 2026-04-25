@@ -413,6 +413,29 @@ async def test_dedup_open_fails_on_redis_error():
 
 
 @pytest.mark.asyncio
+async def test_complete_keeps_collapsed_trail_in_html():
+    """Final edit must embed the tool/thinking trail in a <details> block."""
+    client = _fake_client()
+    async with AsyncLiveStream(client, "!room:t", bot_name="Skynet", typing=False) as stream:
+        await stream.emit(EventType.THINKING, "routing…")
+        await stream.emit(EventType.TOOL_CALL, "q='vibe'", tool_name="search_memory")
+        await stream.emit(EventType.TOOL_RESULT, "3 hits", tool_name="search_memory", duration_s=0.4)
+        await stream.complete(final_text="Зрозумів, шукаю у пам'яті.")
+
+    final_call = client.room_send.await_args_list[-1]
+    new_content = final_call.kwargs["content"]["m.new_content"]
+    plain = new_content["body"]
+    html = new_content.get("formatted_body", "")
+    # Reply text on top, footer next, trail under "── trace"
+    assert "Зрозумів" in plain
+    assert "── trace" in plain
+    assert "search_memory" in plain
+    # HTML carries collapsible <details>
+    assert "<details>" in html
+    assert "search_memory" in html
+
+
+@pytest.mark.asyncio
 async def test_complete_silent_turn_redacts_placeholder():
     """Regression guard: silent-turn cleanup must leave zero artefacts."""
     client = _fake_client()

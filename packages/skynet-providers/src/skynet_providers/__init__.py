@@ -32,6 +32,7 @@ from .chat import async_chat_completion, chat_completion
 from .exceptions import ProviderAuthError, ProviderError
 from .model import (
     VALID_TIERS,
+    InvalidModelOverride,
     LLMClient,
     ModelOverride,
     get_redis_override,
@@ -55,6 +56,7 @@ __all__ = [
     "ProviderAuthError",
     "ModelOverride",
     "VALID_TIERS",
+    "InvalidModelOverride",
     "parse_model_args",
     "resolve_model",
     "slot_allows_override",

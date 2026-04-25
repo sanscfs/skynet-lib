@@ -409,10 +409,34 @@ class AsyncLiveStream:
             if self._tokens_used:
                 footer_parts.append(f"{self._tokens_used} tok")
             footer = " \u00b7 ".join(footer_parts)
-            plain = f"{final_text}\n\n\u2014 {footer}"
+
+            # Render the trail (tool calls, thinking lines, errors)
+            # that fired during the turn, so the final edit keeps the
+            # reasoning visible in a collapsed ``<details>`` block \u2014
+            # Element renders this as expandable. Plain-body fallback
+            # appends the trail under a "\u2500\u2500 trace" delimiter so a
+            # client that doesn't render HTML still has the raw text.
+            trail_lines = self._render_trail_lines()
+            plain_parts = [final_text, "", f"\u2014 {footer}"]
+            if trail_lines:
+                plain_parts.append("")
+                plain_parts.append("\u2500\u2500 trace")
+                plain_parts.extend(trail_lines)
+            plain = "\n".join(plain_parts)
+
             if html_body is None:
                 html_body = _markdown_to_html(final_text)
-            combined_html = f"{html_body}<br/><small>\u2014 {html_lib.escape(footer)}</small>"
+            html_chunks = [
+                html_body,
+                f"<br/><small>\u2014 {html_lib.escape(footer)}</small>",
+            ]
+            if trail_lines:
+                trail_html = "<br/>".join(_markdown_to_html(line) for line in trail_lines)
+                html_chunks.append(
+                    f"<br/><details><summary><i>trace ({len(trail_lines)} steps)</i></summary>"
+                    f"<blockquote>{trail_html}</blockquote></details>"
+                )
+            combined_html = "".join(html_chunks)
             await self._edit(plain, html=combined_html)
 
         if self.redis is not None:
@@ -438,6 +462,39 @@ class AsyncLiveStream:
         if self._tools_used:
             parts.append(f"{len(self._tools_used)} tools")
         return " \u00b7 ".join(parts)
+
+    def _render_trail_lines(self) -> list[str]:
+        """Return the per-step trail (tools / thinking / errors) for the
+        collapsed reasoning block on the final edit.
+
+        Same vocabulary as ``_render_body`` but without the header — the
+        caller already prints a clean reply on top, the trail is only
+        the historical sequence of what happened during the turn.
+        """
+        lines: list[str] = []
+        for entry in self._entries:
+            if entry.type == EventType.TOOL_CALL:
+                marker = "✓" if entry.done else "▸"
+                dur = f" · {entry.duration_s:.1f}s" if entry.done and entry.duration_s else ""
+                args_preview = entry.text.strip()
+                args_preview = f" {args_preview}" if args_preview else ""
+                lines.append(f"{marker} 🔧 `{entry.tool}`{args_preview}{dur}".rstrip())
+            elif entry.type == EventType.TOOL_RESULT:
+                lines.append(f"✓ 📋 {entry.text}".rstrip())
+            elif entry.type == EventType.THINKING:
+                lines.append(f"✓ 🧠 _{entry.text or 'reasoning…'}_")
+            elif entry.type == EventType.ERROR:
+                lines.append(f"✗ ❌ {entry.text}")
+            elif entry.type == EventType.ITERATION:
+                lines.append(f"▸ 🔄 {entry.text}".rstrip())
+            elif entry.type == EventType.ACTION:
+                marker = "✓" if entry.done else "▸"
+                dur = f" · {entry.duration_s:.1f}s" if entry.done and entry.duration_s else ""
+                lines.append(f"{marker} → {entry.text}{dur}".rstrip())
+            else:
+                if entry.text:
+                    lines.append(f"▸ {entry.text}".rstrip())
+        return lines
 
     def _render_body(
         self,

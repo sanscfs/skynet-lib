@@ -153,6 +153,20 @@ def resolve_model(
     return (provider, model)
 
 
+class InvalidModelOverride(ValueError):
+    """``/model`` arguments don't fit the documented grammar.
+
+    Raised by :func:`parse_model_args` instead of silently producing a
+    half-parsed override that lands on a wrong upstream. Common failure
+    modes detected:
+
+    * Provider token written AFTER the model slug
+      (``/model gemma4:e4b local`` instead of ``/model local gemma4:e4b``).
+    * A token that looks like a provider but is misspelled
+      (``/model phalla openai/gpt-oss-120b``).
+    """
+
+
 def parse_model_args(args: str) -> ModelOverride:
     """Parse the portion of a ``/model`` command after the optional target.
 
@@ -162,11 +176,18 @@ def parse_model_args(args: str) -> ModelOverride:
         big mistral mistral-large-2512 tier + provider + model
         mistral mistral-large-latest   provider + model (no tier)
         reset / default / (empty)      clear override
+
+    Raises :class:`InvalidModelOverride` when the input doesn't match
+    these forms but clearly *tried* to (a provider name out of order,
+    a misspelled provider). Bare model slugs without a provider are
+    still accepted — the caller's ``LLM_BASE_URL`` becomes the
+    upstream — because legacy callers depend on that.
     """
     from .override import VALID_PROVIDERS  # avoid module-level circular
 
     tokens = args.strip().split()
     if not tokens or tokens[0].lower() in ("reset", "default"):
+        logger.info("parse_model_args: input=%r → reset", args)
         return ModelOverride()
 
     first = tokens[0].lower()
@@ -182,8 +203,70 @@ def parse_model_args(args: str) -> ModelOverride:
             model = " ".join(rest[1:]) or None
         else:
             model = " ".join(rest)
+            # Misuse guard: a valid provider token sitting somewhere
+            # OTHER than the first rest position means the user almost
+            # certainly inverted the order. Refuse rather than silently
+            # ship the whole string as ``model`` to the default
+            # upstream — that produced the live 2026-04-25 incident
+            # where ``/model gemma4:e4b local`` resolved to a literal
+            # ``"gemma4:e4b local"`` model name on Mistral and
+            # produced a 400 every chat turn until the override was
+            # cleared by hand.
+            for tok in rest[1:]:
+                if tok.lower() in VALID_PROVIDERS:
+                    raise InvalidModelOverride(
+                        f"provider '{tok}' appears after the model slug — "
+                        f"correct order is `/model [tier] {tok} {' '.join(rest[:-1])}`"
+                    )
+            # Same idea for "almost a provider" typos: detect single
+            # tokens close to the canonical names and reject. We only
+            # check the first rest token (the position where a
+            # provider belongs) to avoid false positives on slugs
+            # like ``mistralai/mistral-large-2512`` whose author
+            # prefix shares letters with the provider keyword.
+            first_rest_lc = rest[0].lower()
+            for canonical in VALID_PROVIDERS:
+                if first_rest_lc != canonical and _looks_like_typo(first_rest_lc, canonical):
+                    raise InvalidModelOverride(
+                        f"unknown provider '{rest[0]}' — did you mean '{canonical}'? "
+                        f"Valid providers: {', '.join(VALID_PROVIDERS)}"
+                    )
 
-    return ModelOverride(tier=tier, provider=provider, model=model)
+    override = ModelOverride(tier=tier, provider=provider, model=model)
+    logger.info(
+        "parse_model_args: input=%r → tier=%s provider=%s model=%r",
+        args,
+        tier,
+        provider,
+        model,
+    )
+    return override
+
+
+def _looks_like_typo(token: str, canonical: str) -> bool:
+    """Single-edit-distance check, length-bounded so we don't flag arbitrary slugs."""
+    if abs(len(token) - len(canonical)) > 2:
+        return False
+    if len(token) < 4 or len(canonical) < 4:
+        return False
+    # 1-edit distance: classic three-way diff for insertion/deletion/substitution.
+    if token == canonical:
+        return False
+    if len(token) == len(canonical):
+        diffs = sum(1 for a, b in zip(token, canonical) if a != b)
+        return diffs == 1
+    short, long = sorted([token, canonical], key=len)
+    i = j = diffs = 0
+    while i < len(short) and j < len(long):
+        if short[i] != long[j]:
+            diffs += 1
+            if diffs > 1:
+                return False
+            j += 1
+        else:
+            i += 1
+            j += 1
+    return True
 
 
 def slot_allows_override(slot: str, override: ModelOverride) -> tuple[bool, str]:
