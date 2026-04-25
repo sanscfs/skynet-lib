@@ -116,8 +116,69 @@ class MusicCapture:
         pool: PoolLike,
         title: str,
         album_id: int,
+        *,
+        yt_video_id: Optional[str] = None,
     ) -> int:
-        """Return track id keyed on pseudo yt_video_id, inserting if missing."""
+        """Return track id, inserting if missing.
+
+        Two key modes:
+
+        * ``yt_video_id`` supplied (11-char real YouTube ID): the row is keyed
+          on that. If a pseudo-id (``profiler:<hash>``) row already exists for
+          the same title, it gets promoted in place — its ``yt_video_id`` is
+          rewritten to the real value. This keeps existing listens, listen
+          counters, and ``track_metadata`` attached, and prevents the
+          pseudo/real duplicate that the old chat-scrobble path produced.
+
+        * ``yt_video_id`` omitted: fall back to pseudo (SHA-1 over title) so
+          chat scrobbles without a real video link still get a stable row.
+        """
+        if yt_video_id and len(yt_video_id) == 11:
+            row = await pool.fetchrow(
+                "SELECT id FROM tracks WHERE yt_video_id = $1", yt_video_id,
+            )
+            if row is not None:
+                if album_id is not None:
+                    # Backfill album_id only if the existing row has none —
+                    # never overwrite a previously-resolved album.
+                    await pool.execute(
+                        "UPDATE tracks SET album_id = COALESCE(album_id, $1) WHERE id = $2",
+                        album_id, row["id"],
+                    )
+                return row["id"]
+            # Pseudo row may exist for the same title from an older chat
+            # scrobble — promote it so we don't end up with a duplicate.
+            pseudo = _pseudo_yt_id(title)
+            pseudo_row = await pool.fetchrow(
+                "SELECT id FROM tracks WHERE yt_video_id = $1", pseudo,
+            )
+            if pseudo_row is not None:
+                try:
+                    await pool.execute(
+                        "UPDATE tracks SET yt_video_id = $1, "
+                        "album_id = COALESCE(album_id, $2) "
+                        "WHERE id = $3",
+                        yt_video_id, album_id, pseudo_row["id"],
+                    )
+                    return pseudo_row["id"]
+                except Exception:
+                    # Concurrent insert won the race for the real ID. Re-query.
+                    row = await pool.fetchrow(
+                        "SELECT id FROM tracks WHERE yt_video_id = $1", yt_video_id,
+                    )
+                    if row is not None:
+                        return row["id"]
+            row = await pool.fetchrow(
+                """
+                INSERT INTO tracks (title, yt_video_id, album_id)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (yt_video_id) DO UPDATE SET title = EXCLUDED.title
+                RETURNING id
+                """,
+                title, yt_video_id, album_id,
+            )
+            return row["id"]
+
         pseudo = _pseudo_yt_id(title)
         row = await pool.fetchrow(
             "SELECT id FROM tracks WHERE yt_video_id = $1",
@@ -196,12 +257,18 @@ class MusicCapture:
         source: str = "chat",
         source_event_id: Optional[str] = None,
         listened_at: Optional[datetime] = None,
+        yt_video_id: Optional[str] = None,
     ) -> int:
         """Atomic upsert chain: artist → album → track → INSERT listen.
 
         Returns the resolved ``track_id``. The LLM cannot skip steps because
         this method resolves all FKs before the INSERT — there is no path to
         ``INSERT INTO listens`` without a valid ``track_id``.
+
+        Pass ``yt_video_id`` whenever the caller knows the real YouTube ID
+        (daemon scrobbles, YT-Music DAG inserts) — it lets ``upsert_track``
+        promote any pre-existing pseudo-id row in place instead of creating
+        a duplicate.
 
         Columns ``notes``, ``source_event_id``, and ``notes_source`` must exist
         before this is called; either add them via ``ensure_schema()`` or include
@@ -218,7 +285,9 @@ class MusicCapture:
 
         album_title = (album or "").strip() or track_name
         album_id = await cls.upsert_album(pool, album_title, year, artist_id=artist_id)
-        track_id = await cls.upsert_track(pool, track_name, album_id)
+        track_id = await cls.upsert_track(
+            pool, track_name, album_id, yt_video_id=yt_video_id,
+        )
         if artist_id is not None:
             await cls.link_track_artist(pool, track_id, artist_id)
 
