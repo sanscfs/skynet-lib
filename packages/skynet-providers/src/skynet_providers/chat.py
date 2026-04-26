@@ -204,6 +204,30 @@ async def _post_chat(
             pass
 
     content = "".join(pieces).strip()
+    if content:
+        return content
+
+    # Empty stream — common when the provider routed the answer through
+    # ``choices[0].message.content`` (non-SSE body, even with stream=True
+    # in the request) or when only ``tool_calls`` deltas were emitted.
+    # One non-streaming retry recovers both shapes without spamming the
+    # upstream. If THAT also returns nothing, raise as before.
+    logger.warning(
+        "empty stream from %s; retrying once with stream=False",
+        full,
+    )
+    nostream_payload = {**payload, "stream": False}
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(full, headers=headers, json=nostream_payload)
+            if resp.status_code >= 400:
+                raise ProviderError(
+                    f"upstream {resp.status_code} for {full}: {resp.text[:200]}"
+                )
+            content = _extract_content(resp.json()).strip()
+    except httpx.HTTPError as e:
+        raise ProviderError(f"transport error on retry for {full}: {e}") from e
+
     if not content:
         raise ProviderError(f"empty content from {full}")
     return content
