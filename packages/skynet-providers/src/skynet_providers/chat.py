@@ -221,9 +221,7 @@ async def _post_chat(
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(full, headers=headers, json=nostream_payload)
             if resp.status_code >= 400:
-                raise ProviderError(
-                    f"upstream {resp.status_code} for {full}: {resp.text[:200]}"
-                )
+                raise ProviderError(f"upstream {resp.status_code} for {full}: {resp.text[:200]}")
             content = _extract_content(resp.json()).strip()
     except httpx.HTTPError as e:
         raise ProviderError(f"transport error on retry for {full}: {e}") from e
