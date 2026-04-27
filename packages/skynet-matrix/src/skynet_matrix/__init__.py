@@ -14,6 +14,7 @@ from skynet_matrix.chat_agent import ChatAgent, HistoryLLMCaller, LLMCaller, Too
 from skynet_matrix.client import MatrixClient
 from skynet_matrix.commands import Command, parse_command_line
 from skynet_matrix.history_llm import build_conv_history
+from skynet_matrix.markdown import to_matrix_html
 from skynet_matrix.state_events import (
     STATE_EVENT_TYPE,
     build_bot_commands_content,
@@ -58,6 +59,7 @@ __all__ = [
     "ToolDispatch",
     "ToolSchema",
     "build_conv_history",
+    "to_matrix_html",
     "Command",
     "parse_command_line",
     "publish_bot_commands_state",

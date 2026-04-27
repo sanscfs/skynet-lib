@@ -40,6 +40,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from skynet_matrix.markdown import to_matrix_html
 from skynet_matrix.stream_events import (
     DEFAULT_STREAM_MAXLEN,
     DEFAULT_STREAM_TTL_SECONDS,
@@ -426,7 +427,12 @@ class AsyncLiveStream:
             plain = "\n".join(plain_parts)
 
             if html_body is None:
-                html_body = _markdown_to_html(final_text)
+                # Final reply often carries LLM-authored markdown
+                # (tables, headers, lists, fenced code) that must
+                # render as HTML in Element. The hot-path
+                # ``_markdown_to_html`` only handles inline span
+                # markup — use the full GFM renderer here.
+                html_body = to_matrix_html(final_text)
             html_chunks = [
                 html_body,
                 f"<br/><small>\u2014 {html_lib.escape(footer)}</small>",

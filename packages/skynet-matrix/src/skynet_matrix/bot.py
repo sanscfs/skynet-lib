@@ -53,6 +53,7 @@ from typing import Any, Awaitable, Callable, Optional
 from skynet_matrix.async_live_stream import AsyncLiveStream, current_live_stream
 from skynet_matrix.chronicle_mirror import get_mirror_client, mirror_message
 from skynet_matrix.commands import Command, HandlerCoro, parse_command_line
+from skynet_matrix.markdown import to_matrix_html
 from skynet_matrix.state_events import (
     STATE_EVENT_TYPE,
     publish_bot_commands_state,
@@ -360,7 +361,11 @@ class CommandBot:
             "msgtype": "m.text",
             "body": text,
             "format": "org.matrix.custom.html",
-            "formatted_body": (html if html is not None else html_lib.escape(text).replace("\n", "<br/>")),
+            # Default render: full GFM markdown → Matrix HTML (tables,
+            # headers, lists, fenced code, links). Caller can override
+            # with a pre-rendered ``html`` when they need a different
+            # surface (raw HTML, custom escaping, …).
+            "formatted_body": (html if html is not None else to_matrix_html(text)),
         }
         if thread_root:
             content["m.relates_to"] = {
@@ -938,12 +943,9 @@ class CommandBot:
             "msgtype": "m.text",
             "body": text,
         }
-        if html is None:
-            content["format"] = "org.matrix.custom.html"
-            content["formatted_body"] = html_lib.escape(text).replace("\n", "<br/>")
-        else:
-            content["format"] = "org.matrix.custom.html"
-            content["formatted_body"] = html
+        content["format"] = "org.matrix.custom.html"
+        # Default render: full GFM markdown → Matrix HTML. Override via ``html``.
+        content["formatted_body"] = html if html is not None else to_matrix_html(text)
         if thread_root:
             content["m.relates_to"] = {
                 "rel_type": "m.thread",

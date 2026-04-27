@@ -380,7 +380,9 @@ async def test_handler_none_is_silent():
 @pytest.mark.asyncio
 async def test_post_message_plain_text_builds_escaped_html():
     """Without an explicit ``html=``, the helper auto-formats the text
-    to HTML so clients that use ``formatted_body`` render consistently."""
+    via the GFM markdown renderer so tables / headers / lists in LLM
+    output render correctly. HTML-special chars in the input must still
+    be escaped so a stray ``<x>`` from prose stays literal."""
     bot, client = _make_bot()
 
     resp = await bot.post_message("!room:test", "line1\nline2 & <x>")
@@ -394,8 +396,8 @@ async def test_post_message_plain_text_builds_escaped_html():
     assert content["msgtype"] == "m.text"
     assert content["body"] == "line1\nline2 & <x>"
     assert content["format"] == "org.matrix.custom.html"
-    # Newlines -> <br/>, HTML-special chars escaped.
-    assert "<br/>" in content["formatted_body"]
+    # Markdown wraps prose in <p>; HTML-special chars are escaped.
+    assert "<p>" in content["formatted_body"]
     assert "&amp;" in content["formatted_body"]
     assert "&lt;x&gt;" in content["formatted_body"]
 
