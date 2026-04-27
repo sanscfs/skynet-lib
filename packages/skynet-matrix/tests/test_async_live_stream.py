@@ -154,6 +154,68 @@ async def test_emit_if_live_is_noop_without_stream():
 
 
 @pytest.mark.asyncio
+async def test_thinking_hidden_from_live_view_but_kept_in_trace():
+    """THINKING entries must NOT appear in the live trail (between
+    tool calls users see only 🔧 → 📋), but MUST appear in the
+    collapsed <details> "trace" block on complete()."""
+    client = _fake_client()
+    async with AsyncLiveStream(client, "!room:t", bot_name="Skynet", typing=False) as stream:
+        await stream.emit(EventType.THINKING, "checking argocd state")
+        await stream.emit(EventType.TOOL_CALL, "argocd_app_status", tool_name="argocd_app_status")
+        await stream.emit(EventType.TOOL_RESULT, "Synced", tool_name="argocd_app_status", duration_s=0.2)
+        await stream.emit(EventType.THINKING, "verifying memory limits")
+        await stream.complete(final_text="Done.")
+
+    bodies = [c.kwargs["content"]["body"] for c in client.room_send.await_args_list]
+
+    # All edits PRIOR to complete() must NOT carry the thinking text in
+    # the trail. The 🧠 emoji in the header is the running-status icon,
+    # not a trail entry — assert on the content instead so we don't
+    # confuse the two.
+    pre_complete = bodies[:-1]
+    for b in pre_complete:
+        assert "checking argocd state" not in b, f"live view leaked thinking: {b!r}"
+        assert "verifying memory limits" not in b, f"live view leaked thinking: {b!r}"
+
+    # The final edit (complete) attaches a collapsed <details> trace.
+    # Plain body falls back to a "── trace" delimiter; trace lines DO
+    # include the thinking entries.
+    final = bodies[-1]
+    assert "Done." in final
+    assert "── trace" in final
+    assert "checking argocd state" in final
+    assert "verifying memory limits" in final
+
+    # And the HTML formatted_body has the actual <details>/<summary> tags.
+    final_html = client.room_send.await_args_list[-1].kwargs["content"][
+        "m.new_content"
+    ]["formatted_body"]
+    assert "<details>" in final_html
+    assert "<summary>" in final_html
+    assert "checking argocd state" in final_html
+
+
+@pytest.mark.asyncio
+async def test_thinking_does_not_force_edit():
+    """THINKING events should not trigger force_edit anymore — they're
+    invisible in the live view, so a forced edit would just spam the
+    Matrix homeserver with no-op edits."""
+    client = _fake_client()
+    async with AsyncLiveStream(client, "!room:t", bot_name="Skynet", typing=False) as stream:
+        # Reset count after start() placeholder.
+        baseline = client.room_send.await_count
+        # Burst of THINKING events — without force_edit and within debounce,
+        # none of these should produce an edit.
+        for i in range(5):
+            await stream.emit(EventType.THINKING, f"thought {i}")
+        # No tool call between → no forced edit happened.
+        thinking_only = client.room_send.await_count - baseline
+        assert thinking_only == 0, (
+            f"expected 0 edits during pure thinking burst, got {thinking_only}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_live_stream_token_streaming():
     client = _fake_client()
     async with AsyncLiveStream(client, "!room:t", bot_name="Skynet", typing=False) as stream:

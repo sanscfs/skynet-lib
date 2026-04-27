@@ -278,10 +278,11 @@ class AsyncLiveStream:
                 self._entries[-1].text = trimmed
             else:
                 self._entries.append(_LiveEntry(type=event_type, text=trimmed))
-                # Fresh THINKING entry → anchor so the user sees the first
-                # reasoning line as soon as it arrives; subsequent THINKING
-                # updates (same entry overwritten) ride the debounce.
-                force_edit = True
+            # THINKING is recorded but NOT rendered in the live view —
+            # the live trail shows only 🔧 tool → 📋 result. Reasoning
+            # surfaces in the collapsed <details> "trace" block on
+            # complete(), so users get a clean stream and can expand
+            # for the why. No force_edit (would just trigger a no-op).
         else:
             self._entries.append(_LiveEntry(type=event_type, text=content[:200]))
 
@@ -516,9 +517,9 @@ class AsyncLiveStream:
             elif entry.type == EventType.TOOL_RESULT:
                 lines.append(f"\u2713 \U0001f4cb {entry.text}".rstrip())
             elif entry.type == EventType.THINKING:
-                marker = "\u2713" if entry.done else "\u25b8"
-                text = entry.text or "reasoning..."
-                lines.append(f"{marker} \U0001f9e0 _{text}_")
+                # Skipped from the live trail by design \u2014 surfaces only in
+                # the collapsed <details> "trace" block on complete().
+                continue
             elif entry.type == EventType.ERROR:
                 lines.append(f"\u2717 \u274c {entry.text}")
             elif entry.type == EventType.ITERATION:
