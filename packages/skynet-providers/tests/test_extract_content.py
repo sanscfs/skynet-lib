@@ -180,9 +180,7 @@ def test_tool_calls_priority_over_reasoning():
             {
                 "message": {
                     "content": None,
-                    "tool_calls": [
-                        {"function": {"arguments": "from-tool"}}
-                    ],
+                    "tool_calls": [{"function": {"arguments": "from-tool"}}],
                     "reasoning": "from-reasoning",
                 },
                 "finish_reason": "tool_calls",
