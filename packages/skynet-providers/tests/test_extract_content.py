@@ -16,7 +16,6 @@ Live observations driving the variants:
 from __future__ import annotations
 
 import pytest
-
 from skynet_providers.chat import _extract_content
 from skynet_providers.exceptions import ProviderError
 
