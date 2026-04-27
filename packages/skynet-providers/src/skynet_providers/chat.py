@@ -99,14 +99,89 @@ def _resolve_key(api_url: str, api_key: str | None) -> str:
 
 
 def _extract_content(body: dict[str, Any]) -> str:
+    """Pull assistant text out of a /chat/completions body, lenient about shape.
+
+    OpenAI-compatible providers diverge on where the answer lives when
+    structured output / reasoning models are in play:
+
+    1. ``choices[0].message.content`` — canonical OpenAI shape.
+    2. ``choices[0].message.tool_calls[0].function.arguments`` — some
+       providers route JSON-mode output through a synthetic tool call
+       under ``response_format={"type":"json_object"}``.
+    3. ``choices[0].message.reasoning`` — DeepSeek-R1 / GLM-4.7 style.
+       Glm-4.7 via OpenRouter+DeepInfra was observed (2026-04-27)
+       returning ``content=null`` and the JSON answer in ``reasoning``.
+       ``reasoning_details[0].text`` carries the same payload as a
+       fallback for providers that omit ``reasoning`` itself.
+    4. ``choices[0].text`` — legacy ``/completions`` shape some
+       OpenAI-compatible proxies still emit.
+
+    If none of the above yields a non-empty string, the original
+    ProviderError is raised so callers can iterate. We deliberately do
+    NOT silently swallow into an empty string.
+    """
     choices = body.get("choices") or []
     if not choices:
         raise ProviderError(f"no 'choices' in response: {str(body)[:200]}")
-    message = choices[0].get("message") or {}
+    choice = choices[0]
+    message = choice.get("message") or {}
+
+    # Priority 1: canonical content
     content = message.get("content")
-    if not isinstance(content, str):
-        raise ProviderError(f"choice[0].message.content missing/non-string: {str(body)[:200]}")
-    return content
+    if isinstance(content, str) and content != "":
+        return content
+
+    # Priority 2: tool_calls[0].function.arguments (JSON-mode routed via tool call)
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list) and tool_calls:
+        first = tool_calls[0] if isinstance(tool_calls[0], dict) else None
+        fn = first.get("function") if first else None
+        if isinstance(fn, dict):
+            args = fn.get("arguments")
+            if isinstance(args, str) and args != "":
+                logger.info(
+                    "extracted content from tool_calls[0].function.arguments (model=%s, finish=%s)",
+                    body.get("model"),
+                    choice.get("finish_reason"),
+                )
+                return args
+
+    # Priority 3: reasoning / reasoning_details (DeepSeek-R1 / GLM-4.7)
+    reasoning = message.get("reasoning")
+    if isinstance(reasoning, str) and reasoning != "":
+        logger.info(
+            "extracted content from message.reasoning (model=%s, finish=%s)",
+            body.get("model"),
+            choice.get("finish_reason"),
+        )
+        return reasoning
+    rdetails = message.get("reasoning_details")
+    if isinstance(rdetails, list) and rdetails:
+        first = rdetails[0] if isinstance(rdetails[0], dict) else None
+        if first:
+            text = first.get("text")
+            if isinstance(text, str) and text != "":
+                logger.info(
+                    "extracted content from reasoning_details[0].text (model=%s, finish=%s)",
+                    body.get("model"),
+                    choice.get("finish_reason"),
+                )
+                return text
+
+    # Priority 4: legacy completion shape
+    text = choice.get("text")
+    if isinstance(text, str) and text != "":
+        logger.info(
+            "extracted content from choices[0].text (model=%s, finish=%s)",
+            body.get("model"),
+            choice.get("finish_reason"),
+        )
+        return text
+
+    raise ProviderError(
+        f"choice[0].message.content missing/non-string and no fallback "
+        f"(tool_calls/reasoning/text) found: {str(body)[:200]}"
+    )
 
 
 def chat_completion(
