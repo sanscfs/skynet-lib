@@ -62,6 +62,8 @@ def _build_payload(
     max_tokens: int,
     extra: dict[str, Any] | None,
     messages: list[dict[str, Any]] | None = None,
+    *,
+    api_url: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -70,6 +72,16 @@ def _build_payload(
         "max_tokens": max_tokens,
     }
     if extra:
+        # Ollama-served gpt-oss:20b (and likely other gpt-oss variants)
+        # returns empty ``content`` when ``response_format={"type":
+        # "json_object"}`` is set. The model still produces valid JSON
+        # when the system prompt asks for it; the structured-output flag
+        # is what poisons the output. Strip it for any local endpoint
+        # so callers can pass the same ``extra`` to both primary
+        # (Ollama) and cloud fallback paths without splitting kwargs.
+        # Cloud endpoints keep the flag — they handle it correctly.
+        if api_url and is_local_endpoint(api_url) and "response_format" in extra:
+            extra = {k: v for k, v in extra.items() if k != "response_format"}
         payload.update(extra)
     return payload
 
@@ -120,7 +132,7 @@ def chat_completion(
     """
     key = _resolve_key(api_url, api_key)
     headers = {"Authorization": f"Bearer {key}"} if key else {}
-    payload = _build_payload(prompt, system, model, temperature, max_tokens, extra)
+    payload = _build_payload(prompt, system, model, temperature, max_tokens, extra, api_url=api_url)
 
     url = f"{api_url.rstrip('/')}/chat/completions"
     try:
@@ -292,7 +304,7 @@ async def async_chat_completion(
     """
     key = _resolve_key(api_url, api_key)
     headers = {"Authorization": f"Bearer {key}"} if key else {}
-    payload = _build_payload(prompt, system, model, temperature, max_tokens, extra, messages)
+    payload = _build_payload(prompt, system, model, temperature, max_tokens, extra, messages, api_url=api_url)
 
     try:
         return await _post_chat(
@@ -322,6 +334,7 @@ async def async_chat_completion(
             max_tokens,
             extra,
             messages,
+            api_url=fallback_api_url,
         )
         return await _post_chat(
             url=fallback_api_url,
