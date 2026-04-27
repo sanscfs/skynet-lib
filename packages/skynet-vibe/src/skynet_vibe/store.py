@@ -245,6 +245,17 @@ class VibeStore:
 
         A ``category == sub_category`` filter is always applied; any additional
         filter in ``filter_`` is merged into it.
+
+        ``with_vectors=True`` is required: callers like
+        :func:`skynet_taste.mood.get_mood_vector` need
+        ``signal.vectors.content`` to compute the weighted centroid. Without
+        it, ``_signal_from_point`` falls back to ``payload.get('vector_content')``
+        — which `_payload_from_signal` does NOT write (the content vector
+        lives in Qdrant's primary vector slot, not in payload). Result:
+        every search returned VibeSignals with empty content vectors and
+        the centroid degenerated to zero; observed live 2026-04-27 in
+        skynet-music where the rec_pool's vibe slot was always 0 even
+        with 1046 matching points in storage.
         """
         final_filter = self._vibe_filter(filter_)
         raw = await self.qdrant.search(
@@ -253,6 +264,7 @@ class VibeStore:
             limit=top_k,
             filter=final_filter,
             with_payload=True,
+            with_vectors=True,
             score_threshold=noise_floor,
         )
         out: list[VibeSignal] = []

@@ -86,6 +86,7 @@ class FakeQdrant:
         *,
         filter: dict | None = None,
         with_payload: bool = True,
+        with_vectors: bool = False,
         score_threshold: float | None = None,
     ) -> list[dict]:
         from skynet_vibe.affinity import cosine
