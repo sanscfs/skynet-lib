@@ -187,9 +187,7 @@ async def test_thinking_hidden_from_live_view_but_kept_in_trace():
     assert "verifying memory limits" in final
 
     # And the HTML formatted_body has the actual <details>/<summary> tags.
-    final_html = client.room_send.await_args_list[-1].kwargs["content"][
-        "m.new_content"
-    ]["formatted_body"]
+    final_html = client.room_send.await_args_list[-1].kwargs["content"]["m.new_content"]["formatted_body"]
     assert "<details>" in final_html
     assert "<summary>" in final_html
     assert "checking argocd state" in final_html
@@ -210,9 +208,7 @@ async def test_thinking_does_not_force_edit():
             await stream.emit(EventType.THINKING, f"thought {i}")
         # No tool call between → no forced edit happened.
         thinking_only = client.room_send.await_count - baseline
-        assert thinking_only == 0, (
-            f"expected 0 edits during pure thinking burst, got {thinking_only}"
-        )
+        assert thinking_only == 0, f"expected 0 edits during pure thinking burst, got {thinking_only}"
 
 
 @pytest.mark.asyncio
