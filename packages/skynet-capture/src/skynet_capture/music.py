@@ -54,7 +54,9 @@ class MusicCapture:
         """
         await pool.execute("ALTER TABLE listens ADD COLUMN IF NOT EXISTS notes TEXT")
         await pool.execute("ALTER TABLE listens ADD COLUMN IF NOT EXISTS source_event_id TEXT")
-        await pool.execute("ALTER TABLE listens ADD COLUMN IF NOT EXISTS notes_source TEXT")
+        # notes_source dropped 2026-04-27 — was always a copy of `source`,
+        # never read by anything. Idempotent DROP keeps fresh DBs clean.
+        await pool.execute("ALTER TABLE listens DROP COLUMN IF EXISTS notes_source")
         await pool.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_listens_source_event "
             "ON listens (source_event_id, track_id) "
@@ -303,8 +305,8 @@ class MusicCapture:
         await pool.execute(
             """
             INSERT INTO listens
-              (track_id, album_id, listened_at, source, notes, source_event_id, notes_source)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+              (track_id, album_id, listened_at, source, notes, source_event_id)
+            VALUES ($1, $2, $3, $4, $5, $6)
             """,
             track_id,
             album_id,
@@ -312,7 +314,6 @@ class MusicCapture:
             source,
             notes or None,
             source_event_id or None,
-            source,
         )
         log.debug(
             "persist: track_id=%s source_event_id=%s source=%s",
@@ -357,15 +358,14 @@ class MusicCapture:
         await pool.execute(
             """
             INSERT INTO listens
-              (album_id, listened_at, source, notes, source_event_id, notes_source)
-            VALUES ($1, $2, $3, $4, $5, $6)
+              (album_id, listened_at, source, notes, source_event_id)
+            VALUES ($1, $2, $3, $4, $5)
             """,
             album_id,
             listened_at or datetime.now(timezone.utc),
             source,
             notes or None,
             source_event_id or None,
-            source,
         )
         log.debug(
             "persist_album_listen: album_id=%s source_event_id=%s source=%s",
