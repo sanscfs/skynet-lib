@@ -121,6 +121,7 @@ class QdrantClient:
         *,
         filter: dict | None = None,
         with_payload: bool = True,
+        with_vectors: bool = False,
         score_threshold: float | None = None,
     ) -> list[dict]:
         """Vector similarity search. Returns list of scored points."""
@@ -129,6 +130,11 @@ class QdrantClient:
             "limit": limit,
             "with_payload": with_payload,
         }
+        if with_vectors:
+            # Qdrant uses singular ``with_vector`` in the request body;
+            # callers (notably skynet-vibe.store.search) pass plural
+            # to match qdrant-client SDK conventions.
+            body["with_vector"] = True
         if filter:
             body["filter"] = filter
         if score_threshold is not None:

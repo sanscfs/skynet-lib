@@ -99,9 +99,16 @@ class AsyncQdrantClient:
         *,
         filter: dict | None = None,
         with_payload: bool = True,
+        with_vectors: bool = False,
         score_threshold: float | None = None,
     ) -> list[dict]:
         body: dict[str, Any] = {"vector": vector, "limit": limit, "with_payload": with_payload}
+        if with_vectors:
+            # Qdrant API uses singular ``with_vector`` for the boolean
+            # "include vector in response"; we accept ``with_vectors``
+            # because the downstream skynet-vibe store.search uses that
+            # name (matches qdrant-client SDK conventions).
+            body["with_vector"] = True
         if filter:
             body["filter"] = filter
         if score_threshold is not None:
