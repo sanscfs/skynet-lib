@@ -319,11 +319,20 @@ async def _post_chat(
 
 
 def _parse_sse_delta(line: str) -> str | None:
-    """Pull the ``choices[0].delta.content`` out of one SSE line.
+    """Pull the assistant token out of one SSE line, lenient about shape.
 
     Returns ``None`` for lines we want to skip (comments, empty,
     ``[DONE]`` sentinel, errors) and an empty string for a valid frame
-    with no content delta (e.g. the first frame carrying a ``role``).
+    with no usable token (e.g. the first frame carrying a ``role``).
+
+    Reasoning models (gpt-oss:20b on Ollama, glm-4.7 via OpenRouter,
+    deepseek-r1) stream their output through ``delta.reasoning``
+    instead of ``delta.content`` — content stays an empty string for
+    every chunk and the answer arrives token-by-token in
+    ``reasoning``. Mirror the priority chain in :func:`_extract_content`
+    so streaming consumers don't see an empty stream and fall back
+    needlessly. Same model + same prompt should produce the same
+    final string regardless of stream / non-stream.
     """
     if not line:
         return None
@@ -342,12 +351,33 @@ def _parse_sse_delta(line: str) -> str | None:
     if not choices:
         return None
     delta = choices[0].get("delta") or {}
+
+    # Priority 1: canonical content
     token = delta.get("content")
-    if token is None:
-        return ""
-    if not isinstance(token, str):
-        return None
-    return token
+    if isinstance(token, str) and token != "":
+        return token
+
+    # Priority 2: reasoning (gpt-oss / r1 / glm-4.7 family)
+    reasoning = delta.get("reasoning")
+    if isinstance(reasoning, str) and reasoning != "":
+        return reasoning
+
+    # Priority 3: tool_calls deltas (rare in pure JSON-mode but seen
+    # in some proxies). Sum the partial arguments string the same way
+    # the non-stream path does.
+    tool_calls = delta.get("tool_calls")
+    if isinstance(tool_calls, list) and tool_calls:
+        first = tool_calls[0] if isinstance(tool_calls[0], dict) else None
+        fn = first.get("function") if first else None
+        if isinstance(fn, dict):
+            args = fn.get("arguments")
+            if isinstance(args, str) and args != "":
+                return args
+
+    # No usable token in this chunk — could be a role-only frame at
+    # stream start, or a finish chunk. Returning "" tells the loop
+    # "valid frame, just nothing to append".
+    return ""
 
 
 async def async_chat_completion(
