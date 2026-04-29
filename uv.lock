@@ -1780,7 +1780,7 @@ dev = [
 
 [[package]]
 name = "skynet-matrix"
-version = "2026.4.27.2"
+version = "2026.4.29.1"
 source = { editable = "packages/skynet-matrix" }
 dependencies = [
     { name = "httpx" },
@@ -1881,7 +1881,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "skynet-providers"
-version = "2026.4.29"
+version = "2026.4.32"
 source = { editable = "packages/skynet-providers" }
 dependencies = [
     { name = "httpx" },
@@ -1896,7 +1896,7 @@ requires-dist = [
 
 [[package]]
 name = "skynet-qdrant"
-version = "2026.4.21"
+version = "2026.4.27"
 source = { editable = "packages/skynet-qdrant" }
 dependencies = [
     { name = "httpx" },
@@ -1954,7 +1954,7 @@ requires-dist = [{ name = "hvac", specifier = ">=2.0,<3.0" }]
 
 [[package]]
 name = "skynet-vibe"
-version = "2026.4.25"
+version = "2026.4.27"
 source = { editable = "packages/skynet-vibe" }
 dependencies = [
     { name = "numpy" },

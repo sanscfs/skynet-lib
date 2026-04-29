@@ -236,17 +236,11 @@ class ChatAgent:
                 escaped = _html.escape(truncated)
                 ellipsis = " […]" if len(stripped) > len(truncated) else ""
                 return {
-                    "text": (
-                        "[LLM returned non-JSON — expand below for the raw "
-                        "output]"
-                    ),
+                    "text": ("[LLM returned non-JSON — expand below for the raw output]"),
                     "html": (
                         "<details><summary>LLM returned non-JSON "
                         "(reasoning model fell out of structured-output "
-                        "mode)</summary>\n<pre><code>"
-                        + escaped
-                        + ellipsis
-                        + "</code></pre></details>"
+                        "mode)</summary>\n<pre><code>" + escaped + ellipsis + "</code></pre></details>"
                     ),
                 }
             return None
