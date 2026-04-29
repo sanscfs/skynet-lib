@@ -63,6 +63,11 @@ from skynet_matrix.stream_events import EventType
 OnTextCallback = Callable[..., Awaitable[Optional[Any]]]
 # (event, thread_root_event_id, body) → reply or None
 OnThreadReplyCallback = Callable[[Any, str, str], Awaitable[Optional[Any]]]
+# (event, room_id, target_event_id, key) → None
+# Fires for every inbound m.reaction except those that hit the bot's
+# own pinned menu (those are still routed to the matching emoji-command
+# for backwards compatibility).
+OnReactionCallback = Callable[[Any, str, str, str], Awaitable[None]]
 
 logger = logging.getLogger("skynet_matrix.bot")
 
@@ -149,6 +154,7 @@ class CommandBot:
         sync_timeout_ms: int = 30_000,
         on_text: Optional[OnTextCallback] = None,
         on_thread_reply: Optional[OnThreadReplyCallback] = None,
+        on_reaction: Optional[OnReactionCallback] = None,
         live_stream: bool = True,
         live_stream_bot_name: Optional[str] = None,
         live_stream_initial_text: str = "\u25b8 _thinking..._",
@@ -204,6 +210,7 @@ class CommandBot:
         # the same shape a command handler returns.
         self._on_text: Optional[OnTextCallback] = on_text
         self._on_thread_reply: Optional[OnThreadReplyCallback] = on_thread_reply
+        self._on_reaction: Optional[OnReactionCallback] = on_reaction
 
         self._register_builtin_commands()
 
@@ -267,6 +274,16 @@ class CommandBot:
         (built from registered modules) to compose its LLM tool schema.
         """
         self._on_text = handler
+
+    def set_on_reaction(self, handler: Optional[OnReactionCallback]) -> None:
+        """Install or replace the generic reaction handler.
+
+        Fires on every inbound ``m.reaction`` whose target is *not* the
+        bot's own pinned menu (those still dispatch to emoji-registered
+        commands). Useful for services that record per-message reactions
+        without coupling them to slash-commands.
+        """
+        self._on_reaction = handler
 
     async def run(self) -> None:
         """Log in, join rooms, publish state, sync forever."""
@@ -781,7 +798,7 @@ class CommandBot:
         return str(result), None
 
     async def handle_reaction_event(self, room: Any, event: Any) -> None:
-        """Route an ``m.reaction`` on our pinned menu to the matching cmd."""
+        """Route an ``m.reaction``: menu-emoji → command, else → on_reaction."""
         if getattr(event, "sender", None) == self.config.user_id:
             return
 
@@ -794,15 +811,17 @@ class CommandBot:
         if not room_id:
             return
 
-        # Only react to reactions on our own pinned menu.
-        if self._menu_message_ids.get(room_id) != reacts_to:
-            return
+        if self._menu_message_ids.get(room_id) == reacts_to:
+            cmd = self._emoji_commands.get(key)
+            if cmd is not None:
+                await self._dispatch(cmd.name, [], room_id=room_id, event=event)
+                return
 
-        cmd = self._emoji_commands.get(key)
-        if cmd is None:
-            return
-
-        await self._dispatch(cmd.name, [], room_id=room_id, event=event)
+        if self._on_reaction is not None:
+            try:
+                await self._on_reaction(event, room_id, reacts_to, key)
+            except Exception as exc:
+                logger.exception("on_reaction handler raised: %s", exc)
 
     # -- Internal ----------------------------------------------------------
 

@@ -325,6 +325,90 @@ async def test_reaction_on_other_message_ignored():
     client.room_send.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_on_reaction_callback_fires_for_non_menu_target():
+    """Generic reactions on non-menu messages route to ``on_reaction``."""
+    seen: dict = {}
+
+    async def on_reaction(event, room_id, target, key):
+        seen["room"] = room_id
+        seen["target"] = target
+        seen["key"] = key
+
+    bot, _ = _make_bot(on_reaction=on_reaction)
+    bot._menu_message_ids["!room:test"] = "$menu:1"
+
+    room = SimpleNamespace(room_id="!room:test")
+    event = SimpleNamespace(
+        sender="@user:test",
+        key="\U0001f525",
+        reacts_to="$track:42",
+    )
+    await bot.handle_reaction_event(room, event)
+    assert seen == {"room": "!room:test", "target": "$track:42", "key": "\U0001f525"}
+
+
+@pytest.mark.asyncio
+async def test_on_reaction_callback_skipped_when_menu_command_matches():
+    """Menu emoji reactions still dispatch to the command, not on_reaction."""
+    fired = {"on_reaction": False, "cmd": False}
+
+    async def on_reaction(event, room_id, target, key):  # pragma: no cover
+        fired["on_reaction"] = True
+
+    bot, _ = _make_bot(on_reaction=on_reaction)
+    bot._menu_message_ids["!room:test"] = "$menu:1"
+
+    @bot.command(name="watched", description="", emoji="\U0001f3ac")
+    async def watched(event, args):
+        fired["cmd"] = True
+        return None
+
+    room = SimpleNamespace(room_id="!room:test")
+    event = SimpleNamespace(
+        sender="@user:test",
+        key="\U0001f3ac",
+        reacts_to="$menu:1",
+    )
+    await bot.handle_reaction_event(room, event)
+    assert fired == {"on_reaction": False, "cmd": True}
+
+
+@pytest.mark.asyncio
+async def test_on_reaction_callback_exception_is_swallowed():
+    async def on_reaction(event, room_id, target, key):
+        raise RuntimeError("boom")
+
+    bot, _ = _make_bot(on_reaction=on_reaction)
+    room = SimpleNamespace(room_id="!room:test")
+    event = SimpleNamespace(
+        sender="@user:test",
+        key="\U0001f525",
+        reacts_to="$x",
+    )
+    # Must not raise.
+    await bot.handle_reaction_event(room, event)
+
+
+@pytest.mark.asyncio
+async def test_set_on_reaction_replaces_handler():
+    bot, _ = _make_bot()
+    seen: dict = {}
+
+    async def handler(event, room_id, target, key):
+        seen["k"] = key
+
+    bot.set_on_reaction(handler)
+    room = SimpleNamespace(room_id="!room:test")
+    event = SimpleNamespace(
+        sender="@user:test",
+        key="\U0001f44d",
+        reacts_to="$x",
+    )
+    await bot.handle_reaction_event(room, event)
+    assert seen == {"k": "\U0001f44d"}
+
+
 # -- 10. BotConfig sanity ---------------------------------------------------
 
 

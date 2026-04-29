@@ -9,7 +9,13 @@ from skynet_matrix.async_live_stream import (
     emit_llm_start_if_live,
     emit_token_if_live,
 )
-from skynet_matrix.bot import BotConfig, CommandBot, OnTextCallback, OnThreadReplyCallback
+from skynet_matrix.bot import (
+    BotConfig,
+    CommandBot,
+    OnReactionCallback,
+    OnTextCallback,
+    OnThreadReplyCallback,
+)
 from skynet_matrix.chat_agent import ChatAgent, HistoryLLMCaller, LLMCaller, ToolDispatch, ToolSchema
 from skynet_matrix.client import MatrixClient
 from skynet_matrix.commands import Command, parse_command_line
@@ -52,6 +58,7 @@ __all__ = [
     "CommandBot",
     "OnTextCallback",
     "OnThreadReplyCallback",
+    "OnReactionCallback",
     "BotConfig",
     "ChatAgent",
     "LLMCaller",
