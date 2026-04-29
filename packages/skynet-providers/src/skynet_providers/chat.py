@@ -72,16 +72,24 @@ def _build_payload(
         "max_tokens": max_tokens,
     }
     if extra:
-        # Ollama-served gpt-oss:20b (and likely other gpt-oss variants)
-        # returns empty ``content`` when ``response_format={"type":
-        # "json_object"}`` is set. The model still produces valid JSON
-        # when the system prompt asks for it; the structured-output flag
-        # is what poisons the output. Strip it for any local endpoint
-        # so callers can pass the same ``extra`` to both primary
-        # (Ollama) and cloud fallback paths without splitting kwargs.
-        # Cloud endpoints keep the flag — they handle it correctly.
+        # Ollama-served gpt-oss:20b (and other reasoning variants)
+        # corrupts ``content`` when the OpenAI-style
+        # ``response_format={"type":"json_object"}`` flag is set —
+        # chain-of-thought leaks into ``content`` as broken prose
+        # instead of JSON. Ollama has its own native flag
+        # (``format: "json"`` at the payload root) that DOES route
+        # cleanly through the OpenAI-compat ``/v1/chat/completions``
+        # endpoint: ``content`` carries valid JSON and reasoning gets
+        # split out into its own ``message.reasoning`` field where the
+        # SSE/parse layer can drop it. Translate response_format →
+        # Ollama format=json for local endpoints so callers can keep
+        # passing the same ``extra`` blob to both primary (Ollama) and
+        # cloud fallback paths. Cloud endpoints keep the OpenAI flag.
         if api_url and is_local_endpoint(api_url) and "response_format" in extra:
+            rf = extra.get("response_format") or {}
             extra = {k: v for k, v in extra.items() if k != "response_format"}
+            if isinstance(rf, dict) and rf.get("type") == "json_object":
+                payload["format"] = "json"
         payload.update(extra)
     return payload
 

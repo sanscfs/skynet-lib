@@ -1881,7 +1881,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "skynet-providers"
-version = "2026.4.32"
+version = "2026.4.33"
 source = { editable = "packages/skynet-providers" }
 dependencies = [
     { name = "httpx" },
