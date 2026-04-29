@@ -30,7 +30,6 @@ The handler returns one of:
 
 from __future__ import annotations
 
-import html as _html
 import json
 import logging
 import time
@@ -140,15 +139,16 @@ class ChatAgent:
     # identical to a hang, doubly bad because the LLM *did* answer, just
     # in the wrong format). Reasoning models like ``gpt-oss:20b`` routinely
     # break out of structured-output mode mid-thought, so this is a
-    # frequent path. Surfacing the raw output behind a Matrix-native
-    # ``<details>`` element keeps the room clean (one collapsed line) but
-    # lets the user click to expand and see what the model actually said.
-    # Set to ``False`` to restore the legacy silent-redact behaviour.
+    # frequent path. Surfacing the raw output as an inline markdown code
+    # fence makes it visible by default (no click required) so the user
+    # can see what the model actually said. Set to ``False`` to restore
+    # the legacy silent-redact behaviour.
     surface_non_json_output: bool = True
-    # Maximum chars of raw LLM output to embed in the collapsed details
-    # block. Caps absurdly long replies so a runaway model can't post a
-    # multi-megabyte message. Body text is HTML-escaped before embedding.
-    non_json_output_max_chars: int = 4000
+    # Maximum chars of raw LLM output to embed in the visible fallback.
+    # Caps absurdly long replies so a runaway model can't dump megabytes
+    # into the room. Body is included raw inside ``\`\`\`...\`\`\``, so
+    # markdown special chars survive without escaping.
+    non_json_output_max_chars: int = 1500
     # --- Optional conversation history -----------------------------------
     # When set, ChatAgent maintains per-room history in Redis and passes
     # it to the LLM so context carries across messages.
@@ -233,16 +233,18 @@ class ChatAgent:
             stripped = (raw or "").strip()
             if self.surface_non_json_output and stripped:
                 truncated = stripped[: self.non_json_output_max_chars]
-                escaped = _html.escape(truncated)
                 ellipsis = " […]" if len(stripped) > len(truncated) else ""
-                return {
-                    "text": ("[LLM returned non-JSON — expand below for the raw output]"),
-                    "html": (
-                        "<details><summary>LLM returned non-JSON "
-                        "(reasoning model fell out of structured-output "
-                        "mode)</summary>\n<pre><code>" + escaped + ellipsis + "</code></pre></details>"
-                    ),
-                }
+                # Inline markdown code fence — visible by default. The
+                # earlier ``<details>`` variant rendered as collapsed-or-
+                # missing in Element, which defeated the point of
+                # surfacing the output (user couldn't see what the model
+                # actually said). Plain markdown ``\`\`\`text`` survives
+                # both ``body`` (raw) and ``formatted_body`` (rendered
+                # via the standard markdown→HTML path live_stream
+                # already runs over ``final_text``).
+                return (
+                    "⚠️ LLM returned plain text instead of JSON — raw output:\n\n```\n" + truncated + ellipsis + "\n```"
+                )
             return None
         if decision.get("silent") is True:
             logger.info("chat_agent: LLM chose silence for %r", body[:80])
