@@ -205,3 +205,77 @@ def test_malformed_tool_calls_skipped():
         ]
     }
     assert _extract_content(body) == "the real answer"
+
+
+# ---------------------------------------------------------------------------
+# prefer_content_only — gpt-oss / reasoning models in JSON-mode contexts
+# ---------------------------------------------------------------------------
+
+
+def test_prefer_content_only_skips_reasoning_fallback():
+    """When the caller asked for JSON, reasoning must NOT leak into content."""
+    body = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning": 'User says "hi". They want a greeting...',
+                },
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    with pytest.raises(ProviderError, match="no fallback"):
+        _extract_content(body, prefer_content_only=True)
+
+
+def test_prefer_content_only_skips_reasoning_details_fallback():
+    """Same for reasoning_details — both reasoning paths gated together."""
+    body = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_details": [{"text": "chain-of-thought leak"}],
+                },
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    with pytest.raises(ProviderError, match="no fallback"):
+        _extract_content(body, prefer_content_only=True)
+
+
+def test_prefer_content_only_still_uses_tool_calls():
+    """tool_calls IS valid JSON-mode output; the gate must NOT block it."""
+    body = {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "tool_calls": [{"function": {"arguments": '{"tool":"play_now"}'}}],
+                    "reasoning": "scratchpad",
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    }
+    assert _extract_content(body, prefer_content_only=True) == '{"tool":"play_now"}'
+
+
+def test_prefer_content_only_does_not_block_real_content():
+    """When content IS populated, it always wins regardless of the flag."""
+    body = {
+        "choices": [
+            {
+                "message": {
+                    "content": '{"ok": true}',
+                    "reasoning": "scratchpad",
+                },
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    assert _extract_content(body, prefer_content_only=True) == '{"ok": true}'

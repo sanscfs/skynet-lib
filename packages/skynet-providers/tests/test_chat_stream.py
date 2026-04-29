@@ -134,6 +134,93 @@ async def test_sse_stream_fires_live_hooks_when_active(monkeypatch):
     assert sum(1 for c in hook_calls if c[0] == "tok") == 2
 
 
+def test_parse_sse_delta_reasoning_passthrough_default():
+    """Default behaviour: reasoning streamed as token (DeepSeek-R1 / GLM-4.7)."""
+    import json as _json
+
+    from skynet_providers.chat import _parse_sse_delta
+
+    line = "data: " + _json.dumps({"choices": [{"delta": {"content": "", "reasoning": "scratchpad"}}]})
+    assert _parse_sse_delta(line) == "scratchpad"
+
+
+def test_parse_sse_delta_reasoning_suppressed_under_prefer_content_only():
+    """JSON-mode caller must never see reasoning leak through."""
+    import json as _json
+
+    from skynet_providers.chat import _parse_sse_delta
+
+    line = "data: " + _json.dumps({"choices": [{"delta": {"content": "", "reasoning": "User says hi..."}}]})
+    # Empty string = "valid frame, nothing to append" — accumulator skips it.
+    assert _parse_sse_delta(line, prefer_content_only=True) == ""
+
+
+def test_parse_sse_delta_content_still_wins_under_prefer_content_only():
+    """The flag only suppresses reasoning — real content still flows."""
+    import json as _json
+
+    from skynet_providers.chat import _parse_sse_delta
+
+    line = "data: " + _json.dumps({"choices": [{"delta": {"content": '{"tool"', "reasoning": "ignored"}}]})
+    assert _parse_sse_delta(line, prefer_content_only=True) == '{"tool"'
+
+
+def test_wants_json_only_detects_ollama_format():
+    from skynet_providers.chat import _wants_json_only
+
+    assert _wants_json_only({"format": "json"}) is True
+    assert _wants_json_only({"format": "text"}) is False
+
+
+def test_wants_json_only_detects_openai_response_format():
+    from skynet_providers.chat import _wants_json_only
+
+    assert _wants_json_only({"response_format": {"type": "json_object"}}) is True
+    assert _wants_json_only({"response_format": {"type": "text"}}) is False
+    assert _wants_json_only({}) is False
+
+
+@pytest.mark.asyncio
+async def test_sse_stream_drops_reasoning_under_json_mode_extra(monkeypatch):
+    """End-to-end: passing extra={response_format=json_object} suppresses
+    reasoning across the whole stream so JSON-only callers see clean
+    content. Mirrors the gpt-oss:20b leak that motivated 2026.4.34.
+    """
+    import json as _json
+
+    from skynet_providers.chat import async_chat_completion
+
+    def factory(method, url, *, headers=None, json=None):
+        sse = [
+            # gpt-oss-style reasoning-only chunks before content:
+            "data: " + _json.dumps({"choices": [{"delta": {"content": "", "reasoning": "user wants"}}]}),
+            "",
+            "data: " + _json.dumps({"choices": [{"delta": {"content": "", "reasoning": " a mix"}}]}),
+            "",
+            # Then the real JSON content arrives:
+            "data: " + _json.dumps({"choices": [{"delta": {"content": '{"tool":"play_mix"}'}}]}),
+            "",
+            "data: [DONE]",
+            "",
+        ]
+        return _FakeStreamResp(200, sse)
+
+    token = _FAKE_CTX.set(factory)
+    try:
+        out = await async_chat_completion(
+            prompt="включай мікс",
+            model="gpt-oss:20b",
+            api_url="http://100.64.0.4:11434/v1",
+            api_key="fake",
+            extra={"response_format": {"type": "json_object"}},
+        )
+    finally:
+        _FAKE_CTX.reset(token)
+
+    # Reasoning suppressed; only the JSON content survives.
+    assert out == '{"tool":"play_mix"}'
+
+
 @pytest.mark.asyncio
 async def test_sse_stream_raises_on_http_error():
     from skynet_providers.chat import async_chat_completion

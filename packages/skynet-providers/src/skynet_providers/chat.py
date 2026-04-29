@@ -106,7 +106,7 @@ def _resolve_key(api_url: str, api_key: str | None) -> str:
     return key
 
 
-def _extract_content(body: dict[str, Any]) -> str:
+def _extract_content(body: dict[str, Any], *, prefer_content_only: bool = False) -> str:
     """Pull assistant text out of a /chat/completions body, lenient about shape.
 
     OpenAI-compatible providers diverge on where the answer lives when
@@ -127,6 +127,12 @@ def _extract_content(body: dict[str, Any]) -> str:
     If none of the above yields a non-empty string, the original
     ProviderError is raised so callers can iterate. We deliberately do
     NOT silently swallow into an empty string.
+
+    When ``prefer_content_only=True`` (set automatically when the request
+    payload signals JSON-mode), the reasoning fallbacks (priority 3) are
+    skipped — chain-of-thought is never valid JSON and leaking it would
+    poison downstream parsers. Tool-call (2) and legacy-text (4)
+    fallbacks remain because they DO carry the structured output.
     """
     choices = body.get("choices") or []
     if not choices:
@@ -154,27 +160,29 @@ def _extract_content(body: dict[str, Any]) -> str:
                 )
                 return args
 
-    # Priority 3: reasoning / reasoning_details (DeepSeek-R1 / GLM-4.7)
-    reasoning = message.get("reasoning")
-    if isinstance(reasoning, str) and reasoning != "":
-        logger.info(
-            "extracted content from message.reasoning (model=%s, finish=%s)",
-            body.get("model"),
-            choice.get("finish_reason"),
-        )
-        return reasoning
-    rdetails = message.get("reasoning_details")
-    if isinstance(rdetails, list) and rdetails:
-        first = rdetails[0] if isinstance(rdetails[0], dict) else None
-        if first:
-            text = first.get("text")
-            if isinstance(text, str) and text != "":
-                logger.info(
-                    "extracted content from reasoning_details[0].text (model=%s, finish=%s)",
-                    body.get("model"),
-                    choice.get("finish_reason"),
-                )
-                return text
+    # Priority 3: reasoning / reasoning_details (DeepSeek-R1 / GLM-4.7).
+    # Skipped under prefer_content_only — see docstring.
+    if not prefer_content_only:
+        reasoning = message.get("reasoning")
+        if isinstance(reasoning, str) and reasoning != "":
+            logger.info(
+                "extracted content from message.reasoning (model=%s, finish=%s)",
+                body.get("model"),
+                choice.get("finish_reason"),
+            )
+            return reasoning
+        rdetails = message.get("reasoning_details")
+        if isinstance(rdetails, list) and rdetails:
+            first = rdetails[0] if isinstance(rdetails[0], dict) else None
+            if first:
+                text = first.get("text")
+                if isinstance(text, str) and text != "":
+                    logger.info(
+                        "extracted content from reasoning_details[0].text (model=%s, finish=%s)",
+                        body.get("model"),
+                        choice.get("finish_reason"),
+                    )
+                    return text
 
     # Priority 4: legacy completion shape
     text = choice.get("text")
@@ -226,11 +234,39 @@ def chat_completion(
     if resp.status_code >= 400:
         raise ProviderError(f"upstream {resp.status_code} for {url}: {resp.text[:200]}")
     try:
-        return _extract_content(resp.json())
+        return _extract_content(resp.json(), prefer_content_only=_wants_json_only(payload))
     except ProviderError:
         raise
     except Exception as e:
         raise ProviderError(f"malformed response from {url}: {e}") from e
+
+
+def _wants_json_only(payload: dict[str, Any]) -> bool:
+    """True when the payload asks the provider for pure JSON output.
+
+    Signal sources, in order:
+
+    1. ``payload["format"] == "json"`` — Ollama's native JSON-mode flag
+       (``_build_payload`` translates ``response_format={"type":"json_object"}``
+       into this for local endpoints).
+    2. ``payload["response_format"]["type"] == "json_object"`` — OpenAI-style
+       JSON-mode flag still on the wire for cloud providers.
+
+    When either is set, the caller wants ``content`` carrying valid JSON —
+    NOT the model's chain-of-thought. Reasoning-model SSE streams
+    (gpt-oss:20b, deepseek-r1, glm-4.7) interleave ``reasoning`` deltas
+    in the same response; without this gate the parser's ``reasoning``
+    fallback leaks chain-of-thought prose into the accumulated string and
+    poisons downstream JSON parsers (chat_agent, tool_call routers, etc.).
+    Reasoning is for the model's own benefit, not for callers asking for
+    structured output.
+    """
+    if payload.get("format") == "json":
+        return True
+    rf = payload.get("response_format")
+    if isinstance(rf, dict) and rf.get("type") == "json_object":
+        return True
+    return False
 
 
 async def _post_chat(
@@ -249,9 +285,15 @@ async def _post_chat(
     ``choices[0].message.content`` block which we handle as the only
     SSE line. The returned value matches the non-streaming contract
     exactly — full accumulated assistant content as a string.
+
+    When the payload signals JSON-mode (Ollama ``format=json`` or
+    OpenAI ``response_format=json_object``), reasoning deltas are
+    suppressed in both the SSE parser and the non-stream retry —
+    callers who asked for JSON should never receive chain-of-thought.
     """
     full = f"{url.rstrip('/')}/chat/completions"
     stream_payload = {**payload, "stream": True}
+    prefer_content_only = _wants_json_only(payload)
     hooks = _live_hooks()
     emit_start = hooks["start"]
     emit_token = hooks["token"]
@@ -273,7 +315,7 @@ async def _post_chat(
                         f"upstream {resp.status_code} for {full}: {body.decode(errors='replace')[:200]}"
                     )
                 async for line in resp.aiter_lines():
-                    token = _parse_sse_delta(line)
+                    token = _parse_sse_delta(line, prefer_content_only=prefer_content_only)
                     if token is None:
                         continue
                     if token == "":
@@ -317,7 +359,7 @@ async def _post_chat(
             resp = await client.post(full, headers=headers, json=nostream_payload)
             if resp.status_code >= 400:
                 raise ProviderError(f"upstream {resp.status_code} for {full}: {resp.text[:200]}")
-            content = _extract_content(resp.json()).strip()
+            content = _extract_content(resp.json(), prefer_content_only=prefer_content_only).strip()
     except httpx.HTTPError as e:
         raise ProviderError(f"transport error on retry for {full}: {e}") from e
 
@@ -326,7 +368,7 @@ async def _post_chat(
     return content
 
 
-def _parse_sse_delta(line: str) -> str | None:
+def _parse_sse_delta(line: str, *, prefer_content_only: bool = False) -> str | None:
     """Pull the assistant token out of one SSE line, lenient about shape.
 
     Returns ``None`` for lines we want to skip (comments, empty,
@@ -341,6 +383,15 @@ def _parse_sse_delta(line: str) -> str | None:
     so streaming consumers don't see an empty stream and fall back
     needlessly. Same model + same prompt should produce the same
     final string regardless of stream / non-stream.
+
+    When ``prefer_content_only=True`` (set automatically by ``_post_chat``
+    when the payload requests JSON-mode), reasoning chunks are returned as
+    empty-string ("valid frame, no token to append") instead of being
+    accumulated. This keeps gpt-oss-style chain-of-thought out of the
+    final string and prevents downstream JSON parsers from choking on
+    prose like ``"User says ..."``. The non-stream retry in
+    ``_post_chat`` mirrors the same gate via ``_extract_content``, so a
+    JSON-mode caller can never see reasoning regardless of stream shape.
     """
     if not line:
         return None
@@ -365,10 +416,12 @@ def _parse_sse_delta(line: str) -> str | None:
     if isinstance(token, str) and token != "":
         return token
 
-    # Priority 2: reasoning (gpt-oss / r1 / glm-4.7 family)
-    reasoning = delta.get("reasoning")
-    if isinstance(reasoning, str) and reasoning != "":
-        return reasoning
+    # Priority 2: reasoning (gpt-oss / r1 / glm-4.7 family).
+    # Suppressed when the caller asked for JSON — see docstring.
+    if not prefer_content_only:
+        reasoning = delta.get("reasoning")
+        if isinstance(reasoning, str) and reasoning != "":
+            return reasoning
 
     # Priority 3: tool_calls deltas (rare in pure JSON-mode but seen
     # in some proxies). Sum the partial arguments string the same way
