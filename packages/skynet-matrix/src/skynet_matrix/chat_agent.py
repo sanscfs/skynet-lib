@@ -30,6 +30,7 @@ The handler returns one of:
 
 from __future__ import annotations
 
+import html as _html
 import json
 import logging
 import time
@@ -132,6 +133,22 @@ class ChatAgent:
         "I tried to call `{tool}` but that tool isn't registered. "
         "Try rephrasing or use a Matrix slash command directly."
     )
+    # When the LLM returns plain text (or markdown reasoning) instead of
+    # the expected JSON object, the legacy path silently returned ``None``
+    # — bot.py then called ``stream.complete()`` with no final_text, which
+    # redacted the placeholder so the user saw nothing at all (visually
+    # identical to a hang, doubly bad because the LLM *did* answer, just
+    # in the wrong format). Reasoning models like ``gpt-oss:20b`` routinely
+    # break out of structured-output mode mid-thought, so this is a
+    # frequent path. Surfacing the raw output behind a Matrix-native
+    # ``<details>`` element keeps the room clean (one collapsed line) but
+    # lets the user click to expand and see what the model actually said.
+    # Set to ``False`` to restore the legacy silent-redact behaviour.
+    surface_non_json_output: bool = True
+    # Maximum chars of raw LLM output to embed in the collapsed details
+    # block. Caps absurdly long replies so a runaway model can't post a
+    # multi-megabyte message. Body text is HTML-escaped before embedding.
+    non_json_output_max_chars: int = 4000
     # --- Optional conversation history -----------------------------------
     # When set, ChatAgent maintains per-room history in Redis and passes
     # it to the LLM so context carries across messages.
@@ -213,6 +230,25 @@ class ChatAgent:
         if decision is None:
             logger.info("chat_agent: LLM returned non-JSON (silent): %r", raw[:200])
             last_tools_used.reset(tok)
+            stripped = (raw or "").strip()
+            if self.surface_non_json_output and stripped:
+                truncated = stripped[: self.non_json_output_max_chars]
+                escaped = _html.escape(truncated)
+                ellipsis = " […]" if len(stripped) > len(truncated) else ""
+                return {
+                    "text": (
+                        "[LLM returned non-JSON — expand below for the raw "
+                        "output]"
+                    ),
+                    "html": (
+                        "<details><summary>LLM returned non-JSON "
+                        "(reasoning model fell out of structured-output "
+                        "mode)</summary>\n<pre><code>"
+                        + escaped
+                        + ellipsis
+                        + "</code></pre></details>"
+                    ),
+                }
             return None
         if decision.get("silent") is True:
             logger.info("chat_agent: LLM chose silence for %r", body[:80])
