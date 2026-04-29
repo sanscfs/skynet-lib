@@ -121,6 +121,17 @@ class ChatAgent:
     # the LLM-parsed intent. Default ``None`` preserves silence-is-default;
     # services that want the bot to acknowledge a failed action opt in.
     tool_error_template: Optional[str] = None
+    # Surfaced when the LLM hallucinates a tool that isn't registered AND
+    # the same decision has no usable ``reply`` field. Without this the
+    # bot would go silent on phantom tool calls — visually identical to a
+    # hang, even though the LLM completed normally. ``{tool}`` formats in
+    # the missing tool name. Set to ``None`` to restore the legacy silent
+    # behaviour (not recommended; reasoning models routinely hallucinate
+    # tool names that aren't in the schema).
+    unknown_tool_template: Optional[str] = (
+        "I tried to call `{tool}` but that tool isn't registered. "
+        "Try rephrasing or use a Matrix slash command directly."
+    )
     # --- Optional conversation history -----------------------------------
     # When set, ChatAgent maintains per-room history in Redis and passes
     # it to the LLM so context carries across messages.
@@ -275,9 +286,20 @@ class ChatAgent:
             args = {}
         valid_names = {t.get("name") for t in self.tools}
         if tool_name not in valid_names:
-            logger.warning("chat_agent: unknown tool %r", tool_name)
+            logger.warning(
+                "chat_agent: unknown tool %r (registered=%s)",
+                tool_name,
+                sorted(n for n in valid_names if n),
+            )
             reply = decision.get("reply")
-            return reply if isinstance(reply, str) else None
+            if isinstance(reply, str) and reply.strip():
+                return reply
+            if self.unknown_tool_template:
+                try:
+                    return self.unknown_tool_template.format(tool=tool_name)
+                except Exception:  # noqa: BLE001 -- malformed template
+                    logger.debug("chat_agent: unknown_tool_template format failed")
+            return None
         try:
             result = await self.dispatch(tool_name, args)
         except Exception as exc:  # noqa: BLE001
