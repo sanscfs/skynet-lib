@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "skynet-core>=2026.4.4",
     "numpy>=1.26",
-    "redis>=5.0",
+    "redis>=8.1.0",
 ]
 
 [project.optional-dependencies]
